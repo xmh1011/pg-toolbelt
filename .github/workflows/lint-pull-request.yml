@@ -1,6 +1,9 @@
 name: Lint Pull Request
 
 on:
+  push:
+    branches:
+      - changeset-release/**
   pull_request_target:
     types:
       - opened
@@ -31,5 +34,5 @@ jobs:
         uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - if: github.event_name == 'merge_group'
-        run: echo "Merge queue entry does not have a pull request payload; reporting success for the required lint check."
+      - if: github.event_name != 'pull_request_target'
+        run: echo "This event does not have a pull request payload; reporting success for the required lint check."

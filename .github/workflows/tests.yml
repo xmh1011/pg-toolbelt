@@ -1,6 +1,9 @@
 name: Tests
 
 on:
+  push:
+    branches:
+      - changeset-release/**
   pull_request:
     types:
       - opened

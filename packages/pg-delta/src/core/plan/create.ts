@@ -5,7 +5,7 @@
 import type { Pool } from "pg";
 import { escapeIdentifier } from "pg";
 import { diffCatalogs } from "../catalog.diff.ts";
-import type { Catalog } from "../catalog.model.ts";
+import type { Catalog, ExtractCatalogOptions } from "../catalog.model.ts";
 import { createEmptyCatalog, extractCatalog } from "../catalog.model.ts";
 import type { Change } from "../change.types.ts";
 import type { DiffContext } from "../context.ts";
@@ -97,26 +97,44 @@ export async function createPlan(
     input: CatalogInput,
     label: "source" | "target",
     pools: Array<{ pool: Pool; shouldClose: boolean }>,
+    catalogOptions?: ExtractCatalogOptions,
   ): Promise<Catalog> => {
     if (isResolvedCatalog(input)) {
       return input;
     }
     const resolved = await resolvePool(input, label);
     pools.push(resolved);
-    return extractCatalog(resolved.pool);
+    return extractCatalog(resolved.pool, catalogOptions);
   };
 
   const pools: Array<{ pool: Pool; shouldClose: boolean }> = [];
 
   try {
-    const toCatalog = await resolveCatalog(target, "target", pools);
+    const toCatalog = await resolveCatalog(
+      target,
+      "target",
+      pools,
+      options.targetCatalog,
+    );
 
     const fromCatalog =
       source !== null
-        ? await resolveCatalog(source, "source", pools)
-        : await createEmptyCatalog(toCatalog.version, toCatalog.currentUser);
+        ? await resolveCatalog(source, "source", pools, options.sourceCatalog)
+        : await createEmptyCatalog(
+            toCatalog.version,
+            toCatalog.currentUser,
+            options.sourceCatalog ?? options.targetCatalog,
+          );
 
-    return buildPlanForCatalogs(fromCatalog, toCatalog, options);
+    return buildPlanForCatalogs(
+      fromCatalog,
+      toCatalog,
+      options,
+      source !== null
+        ? options.sourceCatalog
+        : options.sourceCatalog ?? options.targetCatalog,
+      options.targetCatalog,
+    );
   } finally {
     const closers = pools
       .filter((p) => p.shouldClose)
@@ -132,6 +150,8 @@ function buildPlanForCatalogs(
   fromCatalog: Catalog,
   toCatalog: Catalog,
   options: CreatePlanOptions = {},
+  sourceCatalogOptions?: ExtractCatalogOptions,
+  targetCatalogOptions?: ExtractCatalogOptions,
 ): { plan: Plan; sortedChanges: Change[]; ctx: DiffContext } | null {
   const changes = diffCatalogs(fromCatalog, toCatalog, {
     role: options.role,
@@ -203,6 +223,8 @@ function buildPlanForCatalogs(
     ctx,
     sortedChanges,
     options,
+    sourceCatalogOptions,
+    targetCatalogOptions,
     filterDSL,
     serializeDSL,
     finalIntegration,
@@ -315,6 +337,8 @@ function buildPlan(
   ctx: DiffContext,
   changes: Change[],
   options?: CreatePlanOptions,
+  sourceCatalogOptions?: ExtractCatalogOptions,
+  targetCatalogOptions?: ExtractCatalogOptions,
   filterDSL?: FilterDSL,
   serializeDSL?: SerializeDSL,
   integration?: Integration,
@@ -338,6 +362,8 @@ function buildPlan(
     target: { fingerprint: fingerprintTo },
     statements,
     role,
+    sourceCatalog: sourceCatalogOptions,
+    targetCatalog: targetCatalogOptions,
     filter: filterDSL,
     serialize: serializeDSL,
     risk,

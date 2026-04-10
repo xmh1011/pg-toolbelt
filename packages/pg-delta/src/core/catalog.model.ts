@@ -80,6 +80,12 @@ import { extractViews, type View } from "./objects/view/view.model.ts";
 const SUBSCRIPTION_CONNINFO_PLACEHOLDER =
   "host=__CONN_HOST__ port=__CONN_PORT__ dbname=__CONN_DBNAME__ user=__CONN_USER__ password=__CONN_PASSWORD__";
 
+export type CatalogClientTag = "postgres" | "pglite";
+
+export interface ExtractCatalogOptions {
+  client?: CatalogClientTag;
+}
+
 interface CatalogProps {
   aggregates: Record<string, Aggregate>;
   collations: Record<string, Collation>;
@@ -111,6 +117,88 @@ interface CatalogProps {
   version: number;
   currentUser: string;
 }
+
+type CatalogCollectionKey = Exclude<
+  keyof CatalogProps,
+  "depends" | "indexableObjects" | "version" | "currentUser"
+>;
+
+type CatalogCollections = Pick<CatalogProps, CatalogCollectionKey>;
+
+const CATALOG_COLLECTION_KEYS = [
+  "aggregates",
+  "collations",
+  "compositeTypes",
+  "domains",
+  "enums",
+  "extensions",
+  "procedures",
+  "indexes",
+  "materializedViews",
+  "subscriptions",
+  "publications",
+  "rlsPolicies",
+  "roles",
+  "schemas",
+  "sequences",
+  "tables",
+  "triggers",
+  "eventTriggers",
+  "rules",
+  "ranges",
+  "views",
+  "foreignDataWrappers",
+  "servers",
+  "userMappings",
+  "foreignTables",
+] as const satisfies CatalogCollectionKey[];
+
+const PGLITE_DISABLED_COLLECTIONS = new Set<CatalogCollectionKey>([
+  "extensions",
+  "materializedViews",
+  "subscriptions",
+  "publications",
+  "roles",
+  "sequences",
+  "eventTriggers",
+  "ranges",
+  "foreignDataWrappers",
+  "servers",
+  "userMappings",
+  "foreignTables",
+]);
+
+const CATALOG_EXTRACTORS = {
+  aggregates: (pool: Pool) => extractAggregates(pool).then(listToRecord),
+  collations: (pool: Pool) => extractCollations(pool).then(listToRecord),
+  compositeTypes: (pool: Pool) => extractCompositeTypes(pool).then(listToRecord),
+  domains: (pool: Pool) => extractDomains(pool).then(listToRecord),
+  enums: (pool: Pool) => extractEnums(pool).then(listToRecord),
+  extensions: (pool: Pool) => extractExtensions(pool).then(listToRecord),
+  procedures: (pool: Pool) => extractProcedures(pool).then(listToRecord),
+  indexes: (pool: Pool) => extractIndexes(pool).then(listToRecord),
+  materializedViews: (pool: Pool) =>
+    extractMaterializedViews(pool).then(listToRecord),
+  subscriptions: (pool: Pool) => extractSubscriptions(pool).then(listToRecord),
+  publications: (pool: Pool) => extractPublications(pool).then(listToRecord),
+  rlsPolicies: (pool: Pool) => extractRlsPolicies(pool).then(listToRecord),
+  roles: (pool: Pool) => extractRoles(pool).then(listToRecord),
+  schemas: (pool: Pool) => extractSchemas(pool).then(listToRecord),
+  sequences: (pool: Pool) => extractSequences(pool).then(listToRecord),
+  tables: (pool: Pool) => extractTables(pool).then(listToRecord),
+  triggers: (pool: Pool) => extractTriggers(pool).then(listToRecord),
+  eventTriggers: (pool: Pool) => extractEventTriggers(pool).then(listToRecord),
+  rules: (pool: Pool) => extractRules(pool).then(listToRecord),
+  ranges: (pool: Pool) => extractRanges(pool).then(listToRecord),
+  views: (pool: Pool) => extractViews(pool).then(listToRecord),
+  foreignDataWrappers: (pool: Pool) =>
+    extractForeignDataWrappers(pool).then(listToRecord),
+  servers: (pool: Pool) => extractServers(pool).then(listToRecord),
+  userMappings: (pool: Pool) => extractUserMappings(pool).then(listToRecord),
+  foreignTables: (pool: Pool) => extractForeignTables(pool).then(listToRecord),
+} satisfies {
+  [K in CatalogCollectionKey]: (pool: Pool) => Promise<CatalogProps[K]>;
+};
 
 export class Catalog {
   public readonly aggregates: CatalogProps["aggregates"];
@@ -174,6 +262,14 @@ export class Catalog {
     this.version = props.version;
     this.currentUser = props.currentUser;
   }
+}
+
+function resolveExtractCatalogOptions(
+  options?: ExtractCatalogOptions,
+): Required<ExtractCatalogOptions> {
+  return {
+    client: options?.client ?? "postgres",
+  };
 }
 
 // Lazily cached deserialized baselines (shared across calls)
@@ -252,14 +348,21 @@ async function getPg17Baseline(): Promise<Catalog> {
 export async function createEmptyCatalog(
   version: number,
   currentUser: string,
+  options?: ExtractCatalogOptions,
 ): Promise<Catalog> {
   if (version >= 170000) {
     const baseline = await getPg17Baseline();
-    return new Catalog({ ...baseline, version, currentUser });
+    return applyCatalogExtractionOptions(
+      new Catalog({ ...baseline, version, currentUser }),
+      options,
+    );
   }
   if (version >= 150000) {
     const baseline = await getPg1516Baseline();
-    return new Catalog({ ...baseline, version, currentUser });
+    return applyCatalogExtractionOptions(
+      new Catalog({ ...baseline, version, currentUser }),
+      options,
+    );
   }
 
   const publicSchema = new Schema({
@@ -269,138 +372,186 @@ export async function createEmptyCatalog(
     privileges: [],
   });
 
-  return new Catalog({
-    aggregates: {},
-    collations: {},
-    compositeTypes: {},
-    domains: {},
-    enums: {},
-    extensions: {},
-    procedures: {},
-    indexes: {},
-    materializedViews: {},
-    subscriptions: {},
-    publications: {},
-    rlsPolicies: {},
-    roles: {},
-    schemas: { [publicSchema.stableId]: publicSchema },
-    sequences: {},
-    tables: {},
-    triggers: {},
-    eventTriggers: {},
-    rules: {},
-    ranges: {},
-    views: {},
-    foreignDataWrappers: {},
-    servers: {},
-    userMappings: {},
-    foreignTables: {},
-    depends: [],
-    indexableObjects: {},
-    version,
-    currentUser,
-  });
+  return applyCatalogExtractionOptions(
+    new Catalog({
+      aggregates: {},
+      collations: {},
+      compositeTypes: {},
+      domains: {},
+      enums: {},
+      extensions: {},
+      procedures: {},
+      indexes: {},
+      materializedViews: {},
+      subscriptions: {},
+      publications: {},
+      rlsPolicies: {},
+      roles: {},
+      schemas: { [publicSchema.stableId]: publicSchema },
+      sequences: {},
+      tables: {},
+      triggers: {},
+      eventTriggers: {},
+      rules: {},
+      ranges: {},
+      views: {},
+      foreignDataWrappers: {},
+      servers: {},
+      userMappings: {},
+      foreignTables: {},
+      depends: [],
+      indexableObjects: {},
+      version,
+      currentUser,
+    }),
+    options,
+  );
 }
 
-export async function extractCatalog(pool: Pool) {
-  const [
-    aggregates,
-    collations,
-    compositeTypes,
-    domains,
-    enums,
-    extensions,
-    indexes,
-    materializedViews,
-    subscriptions,
-    publications,
-    procedures,
-    rlsPolicies,
-    roles,
-    schemas,
-    sequences,
-    tables,
-    triggers,
-    eventTriggers,
-    rules,
-    ranges,
-    views,
-    foreignDataWrappers,
-    servers,
-    userMappings,
-    foreignTables,
-    depends,
-    version,
-    currentUser,
-  ] = await Promise.all([
-    extractAggregates(pool).then(listToRecord),
-    extractCollations(pool).then(listToRecord),
-    extractCompositeTypes(pool).then(listToRecord),
-    extractDomains(pool).then(listToRecord),
-    extractEnums(pool).then(listToRecord),
-    extractExtensions(pool).then(listToRecord),
-    extractIndexes(pool).then(listToRecord),
-    extractMaterializedViews(pool).then(listToRecord),
-    extractSubscriptions(pool).then(listToRecord),
-    extractPublications(pool).then(listToRecord),
-    extractProcedures(pool).then(listToRecord),
-    extractRlsPolicies(pool).then(listToRecord),
-    extractRoles(pool).then(listToRecord),
-    extractSchemas(pool).then(listToRecord),
-    extractSequences(pool).then(listToRecord),
-    extractTables(pool).then(listToRecord),
-    extractTriggers(pool).then(listToRecord),
-    extractEventTriggers(pool).then(listToRecord),
-    extractRules(pool).then(listToRecord),
-    extractRanges(pool).then(listToRecord),
-    extractViews(pool).then(listToRecord),
-    extractForeignDataWrappers(pool).then(listToRecord),
-    extractServers(pool).then(listToRecord),
-    extractUserMappings(pool).then(listToRecord),
-    extractForeignTables(pool).then(listToRecord),
+export async function extractCatalog(
+  pool: Pool,
+  options?: ExtractCatalogOptions,
+) {
+  const resolvedOptions = resolveExtractCatalogOptions(options);
+  const collections = await extractCatalogCollections(pool, resolvedOptions);
+  const [depends, version, currentUser] = await extractCatalogMetadata(pool);
+
+  return applyCatalogExtractionOptions(
+    normalizeCatalog(
+      new Catalog({
+        ...collections,
+        depends,
+        indexableObjects: buildIndexableObjects(collections),
+        version,
+        currentUser,
+      }),
+    ),
+    resolvedOptions,
+  );
+}
+
+async function extractCatalogCollections(
+  pool: Pool,
+  options: Required<ExtractCatalogOptions>,
+): Promise<CatalogCollections> {
+  const collections = {} as CatalogCollections;
+
+  if (options.client === "pglite") {
+    for (const key of CATALOG_COLLECTION_KEYS) {
+      collections[key] = await extractCatalogCollection(key, pool, options);
+    }
+    return collections;
+  }
+
+  const extracted = await Promise.all(
+    CATALOG_COLLECTION_KEYS.map(async (key) => [
+      key,
+      await extractCatalogCollection(key, pool, options),
+    ] as const),
+  );
+
+  for (const [key, value] of extracted) {
+    collections[key] = value;
+  }
+
+  return collections;
+}
+
+async function extractCatalogCollection<K extends CatalogCollectionKey>(
+  key: K,
+  pool: Pool,
+  options: Required<ExtractCatalogOptions>,
+): Promise<CatalogProps[K]> {
+  if (
+    options.client === "pglite" &&
+    PGLITE_DISABLED_COLLECTIONS.has(key)
+  ) {
+    return {} as CatalogProps[K];
+  }
+
+  return CATALOG_EXTRACTORS[key](pool);
+}
+
+async function extractCatalogMetadata(pool: Pool) {
+  const [depends, version, currentUser] = await Promise.all([
     extractDepends(pool),
     extractVersion(pool),
     extractCurrentUser(pool),
   ]);
 
-  const indexableObjects = {
-    ...tables,
-    ...materializedViews,
-  };
+  return [depends, version, currentUser] as const;
+}
 
-  const catalog = new Catalog({
-    aggregates,
-    collations,
-    compositeTypes,
-    domains,
-    enums,
-    extensions,
-    procedures,
-    indexes,
-    materializedViews,
-    subscriptions,
-    publications,
-    rlsPolicies,
-    roles,
-    schemas,
-    sequences,
-    tables,
-    triggers,
-    eventTriggers,
-    rules,
-    ranges,
-    views,
-    foreignDataWrappers,
-    servers,
-    userMappings,
-    foreignTables,
-    depends,
-    indexableObjects,
-    version,
-    currentUser,
+function applyCatalogExtractionOptions(
+  catalog: Catalog,
+  options?: ExtractCatalogOptions,
+): Catalog {
+  const resolvedOptions = resolveExtractCatalogOptions(options);
+
+  if (resolvedOptions.client === "postgres") {
+    return catalog;
+  }
+
+  const collections = buildProfiledCatalogCollections(catalog, resolvedOptions);
+
+  return new Catalog({
+    ...collections,
+    depends: filterDependsByExtractedStableIds(
+      catalog.depends,
+      collectExtractedStableIds(collections),
+    ),
+    indexableObjects: buildIndexableObjects(collections),
+    version: catalog.version,
+    currentUser: catalog.currentUser,
   });
+}
 
-  return normalizeCatalog(catalog);
+function buildProfiledCatalogCollections(
+  catalog: Catalog,
+  options: Required<ExtractCatalogOptions>,
+): CatalogCollections {
+  const collections = {} as CatalogCollections;
+
+  for (const key of CATALOG_COLLECTION_KEYS) {
+    collections[key] =
+      options.client === "pglite" && PGLITE_DISABLED_COLLECTIONS.has(key)
+        ? ({} as CatalogProps[typeof key])
+        : catalog[key];
+  }
+
+  return collections;
+}
+
+function filterDependsByExtractedStableIds(
+  depends: PgDepend[],
+  extractedStableIds: Set<string>,
+): PgDepend[] {
+  return depends.filter(
+    (dep) =>
+      extractedStableIds.has(dep.dependent_stable_id) &&
+      extractedStableIds.has(dep.referenced_stable_id),
+  );
+}
+
+function collectExtractedStableIds(collections: CatalogCollections): Set<string> {
+  const stableIds = new Set<string>();
+
+  for (const key of CATALOG_COLLECTION_KEYS) {
+    for (const stableId of Object.keys(collections[key])) {
+      stableIds.add(stableId);
+    }
+  }
+
+  return stableIds;
+}
+
+function buildIndexableObjects(
+  collections: Pick<CatalogCollections, "tables" | "materializedViews">,
+): Record<string, TableLikeObject> {
+  return {
+    ...collections.tables,
+    ...collections.materializedViews,
+  };
 }
 
 function listToRecord<T extends BasePgModel>(list: T[]) {

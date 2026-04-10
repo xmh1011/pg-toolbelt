@@ -1,6 +1,45 @@
 import { describe, expect, test } from "bun:test";
 import { createEmptyCatalog } from "./catalog.model.ts";
 
+function collectStableIds(catalog: Awaited<ReturnType<typeof createEmptyCatalog>>) {
+  const stableIds = new Set<string>();
+  const collections = [
+    catalog.aggregates,
+    catalog.collations,
+    catalog.compositeTypes,
+    catalog.domains,
+    catalog.enums,
+    catalog.extensions,
+    catalog.procedures,
+    catalog.indexes,
+    catalog.materializedViews,
+    catalog.subscriptions,
+    catalog.publications,
+    catalog.rlsPolicies,
+    catalog.roles,
+    catalog.schemas,
+    catalog.sequences,
+    catalog.tables,
+    catalog.triggers,
+    catalog.eventTriggers,
+    catalog.rules,
+    catalog.ranges,
+    catalog.views,
+    catalog.foreignDataWrappers,
+    catalog.servers,
+    catalog.userMappings,
+    catalog.foreignTables,
+  ];
+
+  for (const collection of collections) {
+    for (const stableId of Object.keys(collection)) {
+      stableIds.add(stableId);
+    }
+  }
+
+  return stableIds;
+}
+
 describe("createEmptyCatalog", () => {
   test("PG < 15 returns a minimal catalog with only a public schema", async () => {
     const catalog = await createEmptyCatalog(140000, "myuser");
@@ -118,5 +157,31 @@ describe("createEmptyCatalog", () => {
     expect(relPrivs?.privileges.map((p) => p.privilege)).not.toContain(
       "MAINTAIN",
     );
+  });
+
+  test("pglite profile strips unsupported baseline objects and prunes dependencies", async () => {
+    const catalog = await createEmptyCatalog(170009, "postgres", {
+      client: "pglite",
+    });
+
+    expect(catalog.extensions).toEqual({});
+    expect(catalog.materializedViews).toEqual({});
+    expect(catalog.subscriptions).toEqual({});
+    expect(catalog.publications).toEqual({});
+    expect(catalog.roles).toEqual({});
+    expect(catalog.sequences).toEqual({});
+    expect(catalog.eventTriggers).toEqual({});
+    expect(catalog.ranges).toEqual({});
+    expect(catalog.foreignDataWrappers).toEqual({});
+    expect(catalog.servers).toEqual({});
+    expect(catalog.userMappings).toEqual({});
+    expect(catalog.foreignTables).toEqual({});
+    expect(catalog.schemas["schema:public"]).toBeDefined();
+
+    const stableIds = collectStableIds(catalog);
+    for (const dep of catalog.depends) {
+      expect(stableIds.has(dep.dependent_stable_id)).toBe(true);
+      expect(stableIds.has(dep.referenced_stable_id)).toBe(true);
+    }
   });
 });

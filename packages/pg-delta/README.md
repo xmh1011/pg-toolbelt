@@ -158,6 +158,24 @@ if (planResult) {
 - **Reproducibility**: Plans can be version-controlled and shared
 - **Safety checks**: Automatic detection of data-loss operations
 
+### Reduced catalog extraction
+
+When extracting catalogs programmatically, you can select a lighter profile for
+single-connection clients such as pglite:
+
+```typescript
+import { extractCatalog } from "@supabase/pg-delta";
+
+const catalog = await extractCatalog(pool, { client: "pglite" });
+```
+
+To benchmark the full vs reduced extraction profiles locally:
+
+```bash
+cd packages/pg-delta
+bun run bench:catalog-extraction
+```
+
 ### Integration DSL
 
 Integrations use a JSON-based DSL for filtering and serialization:

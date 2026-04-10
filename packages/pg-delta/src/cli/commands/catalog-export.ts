@@ -4,7 +4,10 @@
 
 import { writeFile } from "node:fs/promises";
 import { buildCommand, type CommandContext } from "@stricli/core";
-import { extractCatalog } from "../../core/catalog.model.ts";
+import {
+  extractCatalog,
+  type CatalogClientTag,
+} from "../../core/catalog.model.ts";
 import {
   serializeCatalog,
   stringifyCatalogSnapshot,
@@ -27,6 +30,12 @@ export const catalogExportCommand = buildCommand({
       role: {
         kind: "parsed",
         brief: "Role to use when extracting the catalog (SET ROLE)",
+        parse: String,
+        optional: true,
+      },
+      client: {
+        kind: "parsed",
+        brief: "Catalog extraction client profile: postgres or pglite",
         parse: String,
         optional: true,
       },
@@ -56,6 +65,7 @@ Use cases:
       target: string;
       output: string;
       role?: string;
+      client?: string;
     },
   ) {
     const { pool, close } = await createManagedPool(flags.target, {
@@ -64,7 +74,8 @@ Use cases:
     });
 
     try {
-      const catalog = await extractCatalog(pool);
+      const client = parseCatalogClient(flags.client);
+      const catalog = await extractCatalog(pool, { client });
       const snapshot = serializeCatalog(catalog);
       const json = stringifyCatalogSnapshot(snapshot);
       await writeFile(flags.output, json, "utf-8");
@@ -76,3 +87,15 @@ Use cases:
     }
   },
 });
+
+function parseCatalogClient(client?: string): CatalogClientTag | undefined {
+  if (client === undefined) {
+    return undefined;
+  }
+  if (client === "postgres" || client === "pglite") {
+    return client;
+  }
+  throw new Error(
+    `Invalid --client value "${client}". Expected "postgres" or "pglite".`,
+  );
+}

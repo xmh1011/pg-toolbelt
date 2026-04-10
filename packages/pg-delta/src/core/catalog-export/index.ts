@@ -11,6 +11,10 @@ export {
   createEmptyCatalog,
   extractCatalog,
 } from "../catalog.model.ts";
+export type {
+  CatalogClientTag,
+  ExtractCatalogOptions,
+} from "../catalog.model.ts";
 export type { CatalogSnapshot } from "../catalog.snapshot.ts";
 export {
   deserializeCatalog,

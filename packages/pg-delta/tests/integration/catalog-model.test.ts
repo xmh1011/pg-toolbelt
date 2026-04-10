@@ -325,6 +325,91 @@ for (const pgVersion of POSTGRES_VERSIONS) {
         expect(policy.table_name).toBe("users");
       }),
     );
+
+    test(
+      "extract reduced pglite profile",
+      withDb(pgVersion, async (db) => {
+        await db.main.query(`
+        CREATE SCHEMA test_schema;
+        CREATE TABLE test_schema.users (id int PRIMARY KEY, name text);
+        CREATE SEQUENCE test_schema.test_seq START 1 INCREMENT 1;
+        CREATE VIEW test_schema.users_view AS
+          SELECT id, name FROM test_schema.users;
+        CREATE MATERIALIZED VIEW test_schema.users_mv AS
+          SELECT id, name FROM test_schema.users;
+        CREATE OR REPLACE FUNCTION test_schema.log_changes()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        CREATE TRIGGER users_audit_trigger
+          AFTER INSERT OR UPDATE ON test_schema.users
+          FOR EACH ROW EXECUTE FUNCTION test_schema.log_changes();
+        CREATE FUNCTION test_schema.log_ddl()
+        RETURNS event_trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+          RAISE NOTICE 'DDL event %', TG_TAG;
+        END;
+        $$;
+        CREATE EVENT TRIGGER ddl_logger
+          ON ddl_command_start
+          WHEN TAG IN ('CREATE TABLE')
+          EXECUTE FUNCTION test_schema.log_ddl();
+      `);
+
+        const catalog = await extractCatalog(db.main, { client: "pglite" });
+
+        expect(catalog.tables["table:test_schema.users"]).toBeDefined();
+        expect(catalog.views["view:test_schema.users_view"]).toBeDefined();
+        expect(
+          catalog.triggers["trigger:test_schema.users.users_audit_trigger"],
+        ).toBeDefined();
+
+        expect(catalog.extensions).toEqual({});
+        expect(catalog.materializedViews).toEqual({});
+        expect(catalog.subscriptions).toEqual({});
+        expect(catalog.publications).toEqual({});
+        expect(catalog.roles).toEqual({});
+        expect(catalog.sequences).toEqual({});
+        expect(catalog.eventTriggers).toEqual({});
+        expect(catalog.ranges).toEqual({});
+        expect(catalog.foreignDataWrappers).toEqual({});
+        expect(catalog.servers).toEqual({});
+        expect(catalog.userMappings).toEqual({});
+        expect(catalog.foreignTables).toEqual({});
+        expect(catalog.indexableObjects).toStrictEqual(catalog.tables);
+
+        const stableIds = new Set<string>();
+        const collections = [
+          catalog.aggregates,
+          catalog.collations,
+          catalog.compositeTypes,
+          catalog.domains,
+          catalog.enums,
+          catalog.procedures,
+          catalog.indexes,
+          catalog.rlsPolicies,
+          catalog.schemas,
+          catalog.tables,
+          catalog.triggers,
+          catalog.rules,
+          catalog.views,
+        ];
+        for (const collection of collections) {
+          for (const stableId of Object.keys(collection)) {
+            stableIds.add(stableId);
+          }
+        }
+
+        for (const dep of catalog.depends) {
+          expect(stableIds.has(dep.dependent_stable_id)).toBe(true);
+          expect(stableIds.has(dep.referenced_stable_id)).toBe(true);
+        }
+      }),
+    );
   });
 }
 

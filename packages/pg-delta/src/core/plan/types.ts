@@ -4,6 +4,7 @@
 
 import z from "zod";
 import type { Change } from "../change.types.ts";
+import type { ExtractCatalogOptions } from "../catalog.model.ts";
 import type { FilterDSL } from "../integrations/filter/dsl.ts";
 import type { ChangeFilter } from "../integrations/filter/filter.types.ts";
 import type { SerializeDSL } from "../integrations/serialize/dsl.ts";
@@ -132,6 +133,16 @@ export const PlanSchema = z.object({
   }),
   statements: z.array(z.string()),
   role: z.string().optional(),
+  sourceCatalog: z
+    .object({
+      client: z.enum(["postgres", "pglite"]).optional(),
+    })
+    .optional(),
+  targetCatalog: z
+    .object({
+      client: z.enum(["postgres", "pglite"]).optional(),
+    })
+    .optional(),
   filter: z.any().optional(), // FilterDSL - complex recursive type, validated at compile time
   serialize: z.any().optional(), // SerializeDSL - complex recursive type, validated at compile time
   risk: z
@@ -162,6 +173,10 @@ export interface CreatePlanOptions {
   serialize?: SerializeDSL | ChangeSerializer;
   /** Role to use when executing the migration (SET ROLE will be added to statements) */
   role?: string;
+  /** Catalog extraction options for the source/current database */
+  sourceCatalog?: ExtractCatalogOptions;
+  /** Catalog extraction options for the target/desired database */
+  targetCatalog?: ExtractCatalogOptions;
   /**
    * When true, don't subtract privileges covered by ALTER DEFAULT PRIVILEGES
    * from explicit GRANTs during diffing. Use this for declarative export where

@@ -4,6 +4,7 @@
 
 import type { Pool } from "pg";
 import { diffCatalogs } from "../catalog.diff.ts";
+import type { ExtractCatalogOptions } from "../catalog.model.ts";
 import { extractCatalog } from "../catalog.model.ts";
 import type { DiffContext } from "../context.ts";
 import { buildPlanScopeFingerprint, hashStableIds } from "../fingerprint.ts";
@@ -19,8 +20,10 @@ type ApplyPlanResult =
   | { status: "applied"; statements: number; warnings?: string[] }
   | { status: "failed"; error: unknown; script: string };
 
-interface ApplyPlanOptions {
+export interface ApplyPlanOptions {
   verifyPostApply?: boolean;
+  sourceCatalog?: ExtractCatalogOptions;
+  targetCatalog?: ExtractCatalogOptions;
 }
 
 type ConnectionInput = string | Pool;
@@ -81,8 +84,8 @@ export async function applyPlan(
   try {
     // Recompute stableIds and fingerprints from current and desired catalogs
     const [currentCatalog, desiredCatalog] = await Promise.all([
-      extractCatalog(currentPool),
-      extractCatalog(desiredPool),
+      extractCatalog(currentPool, options.sourceCatalog ?? plan.sourceCatalog),
+      extractCatalog(desiredPool, options.targetCatalog ?? plan.targetCatalog),
     ]);
 
     const changes = diffCatalogs(currentCatalog, desiredCatalog);
@@ -137,7 +140,10 @@ export async function applyPlan(
 
     if (options.verifyPostApply !== false) {
       try {
-        const updatedCatalog = await extractCatalog(currentPool);
+        const updatedCatalog = await extractCatalog(
+          currentPool,
+          options.sourceCatalog ?? plan.sourceCatalog,
+        );
         const updatedFingerprint = hashStableIds(updatedCatalog, stableIds);
         if (updatedFingerprint !== plan.target.fingerprint) {
           warnings.push(

@@ -253,8 +253,7 @@ export function diffSubscriptions(
     // SECURITY LABELS
     changes.push(
       ...diffSecurityLabels<
-        | CreateSecurityLabelOnSubscription
-        | DropSecurityLabelOnSubscription
+        CreateSecurityLabelOnSubscription | DropSecurityLabelOnSubscription
       >(
         mainSubscription.security_labels,
         branchSubscription.security_labels,

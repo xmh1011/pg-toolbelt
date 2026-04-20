@@ -265,8 +265,7 @@ export function diffForeignTables(
     // SECURITY LABELS
     changes.push(
       ...diffSecurityLabels<
-        | CreateSecurityLabelOnForeignTable
-        | DropSecurityLabelOnForeignTable
+        CreateSecurityLabelOnForeignTable | DropSecurityLabelOnForeignTable
       >(
         mainTable.security_labels,
         branchTable.security_labels,

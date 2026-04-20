@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   diffSecurityLabels,
-  securityLabelPropsSchema,
   type SecurityLabelProps,
+  securityLabelPropsSchema,
 } from "./security-label.types.ts";
 
 describe("securityLabelPropsSchema", () => {

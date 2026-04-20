@@ -205,8 +205,7 @@ export function diffCompositeTypes(
       // SECURITY LABELS
       changes.push(
         ...diffSecurityLabels<
-          | CreateSecurityLabelOnCompositeType
-          | DropSecurityLabelOnCompositeType
+          CreateSecurityLabelOnCompositeType | DropSecurityLabelOnCompositeType
         >(
           mainCompositeType.security_labels,
           branchCompositeType.security_labels,

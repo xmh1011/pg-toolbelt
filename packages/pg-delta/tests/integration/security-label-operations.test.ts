@@ -83,6 +83,156 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
   });
 
+  describe(`security labels on other object types (pg${pgVersion})`, () => {
+    test(
+      "view label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            CREATE TABLE public.base (id integer);
+            CREATE VIEW public.v AS SELECT id FROM public.base;
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON VIEW public.v IS 'classified';
+          `,
+        });
+      }),
+    );
+
+    test(
+      "materialized view label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            CREATE TABLE public.base (id integer);
+            CREATE MATERIALIZED VIEW public.mv AS SELECT id FROM public.base;
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON MATERIALIZED VIEW public.mv IS 'classified';
+          `,
+        });
+      }),
+    );
+
+    test(
+      "sequence label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            CREATE SEQUENCE public.s1;
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON SEQUENCE public.s1 IS 'classified';
+          `,
+        });
+      }),
+    );
+
+    test(
+      "domain label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            CREATE DOMAIN public.non_empty_text AS text CHECK (VALUE <> '');
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON DOMAIN public.non_empty_text IS 'classified';
+          `,
+        });
+      }),
+    );
+
+    test(
+      "enum (TYPE) label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            CREATE TYPE public.status AS ENUM ('active', 'inactive');
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON TYPE public.status IS 'classified';
+          `,
+        });
+      }),
+    );
+
+    test(
+      "composite TYPE label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            CREATE TYPE public.full_name AS (first text, last text);
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON TYPE public.full_name IS 'classified';
+          `,
+        });
+      }),
+    );
+
+    test(
+      "function label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            CREATE FUNCTION public.noop() RETURNS integer AS $$ SELECT 1 $$ LANGUAGE sql;
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON FUNCTION public.noop() IS 'classified';
+          `,
+        });
+      }),
+    );
+
+    test(
+      "role label (shared catalog)",
+      withDb(pgVersion, async (db) => {
+        // Roles are cluster-wide; use DO/IF-NOT-EXISTS so the setup is
+        // idempotent across tests that share a container.
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+            ${DUMMY_PROVIDER_SETUP}
+            DO $$
+            BEGIN
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_roles WHERE rolname = 'test_role_with_label'
+              ) THEN
+                CREATE ROLE test_role_with_label;
+              END IF;
+            END
+            $$;
+          `,
+          testSql: `
+            SECURITY LABEL FOR dummy ON ROLE test_role_with_label IS 'classified';
+          `,
+        });
+      }),
+    );
+  });
+
   describe(`security labels on schemas (pg${pgVersion})`, () => {
     test(
       "add label to new schema",

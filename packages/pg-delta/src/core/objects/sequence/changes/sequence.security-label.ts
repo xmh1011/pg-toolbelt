@@ -13,7 +13,10 @@ export class CreateSecurityLabelOnSequence extends CreateSequenceChange {
   public readonly securityLabel: SecurityLabelProps;
   public readonly scope = "security_label" as const;
 
-  constructor(props: { sequence: Sequence; securityLabel: SecurityLabelProps }) {
+  constructor(props: {
+    sequence: Sequence;
+    securityLabel: SecurityLabelProps;
+  }) {
     super();
     this.sequence = props.sequence;
     this.securityLabel = props.securityLabel;
@@ -49,7 +52,10 @@ export class DropSecurityLabelOnSequence extends DropSequenceChange {
   public readonly securityLabel: SecurityLabelProps;
   public readonly scope = "security_label" as const;
 
-  constructor(props: { sequence: Sequence; securityLabel: SecurityLabelProps }) {
+  constructor(props: {
+    sequence: Sequence;
+    securityLabel: SecurityLabelProps;
+  }) {
     super();
     this.sequence = props.sequence;
     this.securityLabel = props.securityLabel;

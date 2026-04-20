@@ -138,8 +138,7 @@ export function diffEventTriggers(
     // SECURITY LABELS
     changes.push(
       ...diffSecurityLabels<
-        | CreateSecurityLabelOnEventTrigger
-        | DropSecurityLabelOnEventTrigger
+        CreateSecurityLabelOnEventTrigger | DropSecurityLabelOnEventTrigger
       >(
         mainEventTrigger.security_labels,
         branchEventTrigger.security_labels,

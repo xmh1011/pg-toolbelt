@@ -3,8 +3,8 @@ import {
   diffPrivileges,
   emitObjectPrivilegeChanges,
 } from "../base.privilege-diff.ts";
-import { diffSecurityLabels } from "../security-label.types.ts";
 import type { ObjectDiffContext } from "../diff-context.ts";
+import { diffSecurityLabels } from "../security-label.types.ts";
 import { AlterSchemaChangeOwner } from "./changes/schema.alter.ts";
 import {
   CreateCommentOnSchema,

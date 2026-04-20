@@ -189,8 +189,7 @@ export function diffPublications(
     // SECURITY LABELS
     changes.push(
       ...diffSecurityLabels<
-        | CreateSecurityLabelOnPublication
-        | DropSecurityLabelOnPublication
+        CreateSecurityLabelOnPublication | DropSecurityLabelOnPublication
       >(
         mainPublication.security_labels,
         branchPublication.security_labels,

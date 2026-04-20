@@ -108,7 +108,9 @@ export class CreateSecurityLabelOnColumn extends CreateTableChange {
       this.table.name,
       this.column.name,
     );
-    return [stableId.securityLabel(columnStableId, this.securityLabel.provider)];
+    return [
+      stableId.securityLabel(columnStableId, this.securityLabel.provider),
+    ];
   }
 
   get requires() {
@@ -152,7 +154,9 @@ export class DropSecurityLabelOnColumn extends DropTableChange {
       this.table.name,
       this.column.name,
     );
-    return [stableId.securityLabel(columnStableId, this.securityLabel.provider)];
+    return [
+      stableId.securityLabel(columnStableId, this.securityLabel.provider),
+    ];
   }
 
   get requires() {

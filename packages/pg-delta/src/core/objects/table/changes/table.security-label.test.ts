@@ -105,11 +105,7 @@ describe("table.security-label", () => {
       securityLabel: { provider: "dummy", label: "classified" },
     });
 
-    const colStableId = stableId.column(
-      table.schema,
-      table.name,
-      column.name,
-    );
+    const colStableId = stableId.column(table.schema, table.name, column.name);
     expect(change.creates).toEqual([
       stableId.securityLabel(colStableId, "dummy"),
     ]);
@@ -128,11 +124,7 @@ describe("table.security-label", () => {
       column,
       securityLabel: { provider: "dummy", label: "x" },
     });
-    const colStableId = stableId.column(
-      table.schema,
-      table.name,
-      column.name,
-    );
+    const colStableId = stableId.column(table.schema, table.name, column.name);
     expect(change.drops).toEqual([
       stableId.securityLabel(colStableId, "dummy"),
     ]);

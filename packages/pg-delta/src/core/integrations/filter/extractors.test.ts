@@ -2,6 +2,26 @@ import { describe, expect, test } from "bun:test";
 import type { Change } from "../../change.types.ts";
 import { getSchema, PROPERTY_EXTRACTORS } from "./extractors.ts";
 
+describe("provider extractor", () => {
+  test("returns provider on security_label changes", () => {
+    const change = {
+      scope: "security_label",
+      securityLabel: { provider: "pg_graphql", label: "x" },
+    } as unknown as Change;
+    expect(PROPERTY_EXTRACTORS.provider(change)).toBe("pg_graphql");
+  });
+
+  test("returns null on non-security_label changes", () => {
+    const change = { scope: "object" } as unknown as Change;
+    expect(PROPERTY_EXTRACTORS.provider(change)).toBeNull();
+  });
+
+  test("returns null when securityLabel missing", () => {
+    const change = { scope: "security_label" } as unknown as Change;
+    expect(PROPERTY_EXTRACTORS.provider(change)).toBeNull();
+  });
+});
+
 describe("getSchema", () => {
   test("returns schema for table", () => {
     const change = {
@@ -106,6 +126,7 @@ describe("PROPERTY_EXTRACTORS", () => {
       "eventTriggerName",
       "procedureBinaryPath",
       "triggerFunctionSchema",
+      "provider",
     ];
     expect(Object.keys(PROPERTY_EXTRACTORS).sort()).toEqual(
       expectedKeys.sort(),

@@ -30,6 +30,7 @@ type ExtractedProperties = {
   eventTriggerName?: string | string[];
   procedureBinaryPath?: string | string[];
   triggerFunctionSchema?: string | string[];
+  provider?: string | string[];
 };
 
 /**

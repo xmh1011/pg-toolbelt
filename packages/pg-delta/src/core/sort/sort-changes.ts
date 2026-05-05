@@ -23,6 +23,7 @@ const debugGraph = debug("pg-delta:graph");
 import {
   filterEdgesForCycleBreaking,
   getEdgesInCycle,
+  preemptivelyFilterIntrinsicallyBreakableEdges,
 } from "./dependency-filter.ts";
 import {
   buildGraphData,
@@ -184,6 +185,20 @@ function attemptSortRound(
 
   // Step 3: Convert constraints to edges and deduplicate immediately
   let edges = dedupeEdges(convertConstraintsToEdges(allConstraints, options));
+
+  // Step 3.5: Pre-filter edges that intrinsically match a cycle-breaking
+  // rule (e.g. sequence-owned columns where pg_depend reports a bidirectional
+  // cycle that we always want to cut). Without this pass, the per-cycle loop
+  // below pays one full graph traversal + edge-filter pass per cycle —
+  // schemas with N sequence-owned columns then take N iterations of an
+  // O(E) loop. A pre-pass is correct because the only cycle-breaking filter
+  // we have is intrinsic to the (dep, ref) pair, not to which other edges
+  // happen to share the cycle.
+  edges = preemptivelyFilterIntrinsicallyBreakableEdges(
+    edges,
+    phaseChanges,
+    graphData,
+  );
 
   // Step 4: Iteratively detect and break cycles by edge filtering.
   // We loop until no cycles remain OR we see the same cycle twice — the

@@ -84,6 +84,7 @@
     "bench:explain-extract": "bun bench/explain-extract.bench.ts",
     "bench:serve-db": "bun bench/serve-db.ts",
     "bench:quick-extract": "bun bench/quick-extract.ts",
+    "bench:quick-sort": "bun bench/quick-sort.ts",
     "bench:gen-fixture": "bun bench/generate-large-schema.ts",
     "update-empty-baseline": "bun scripts/update-empty-catalog-baseline.ts",
     "version": "changeset version && bun install --no-frozen-lockfile && bun run format-and-lint --write"

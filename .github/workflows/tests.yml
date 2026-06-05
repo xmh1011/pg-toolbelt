@@ -28,36 +28,79 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Detect changes
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Needed so the merge_group author lookup can read the queued PR's author
+      # (merge_group events carry no pull_request payload).
+      pull-requests: read
     outputs:
       pg-delta: ${{ github.event_name == 'merge_group' && 'true' || steps.changes.outputs.pg-delta }}
       pg-delta-package-json: ${{ github.event_name == 'merge_group' && 'true' || steps.changes.outputs.pg-delta-package-json }}
       pg-topo: ${{ github.event_name == 'merge_group' && 'true' || steps.changes.outputs.pg-topo }}
       pg-topo-package-json: ${{ github.event_name == 'merge_group' && 'true' || steps.changes.outputs.pg-topo-package-json }}
       root: ${{ github.event_name == 'merge_group' && 'true' || steps.changes.outputs.root }}
-      # 'true' only when this is a PR from changesets' release branch AND every
-      # changed file is in the release-PR whitelist (CHANGELOGs, package.json
-      # version bumps, .changeset state). Any extra file flips this back to
-      # 'false' so the heavy suite runs and the unexpected change is caught.
+      # 'true' only when the PR is authored by the changesets release bot AND
+      # every changed file is in the release-PR whitelist (CHANGELOGs,
+      # package.json version bumps, .changeset state). Both guards must hold:
+      # the author check stops anyone from bypassing CI with a whitelist-only
+      # PR, and any extra file flips the content check back to 'false' so the
+      # heavy suite runs. Enforced on both the pull_request and merge_group
+      # events (see the release-author step for how the author is resolved in
+      # the queue, which carries no pull_request payload).
       is-release-pr: >-
         ${{
-          github.event_name == 'pull_request'
-          && github.head_ref == 'changeset-release/main'
+          steps.release-author.outputs.is-release-author == 'true'
           && steps.changes.outputs.is-release-pr-content == 'true'
         }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Detect changes
-        if: github.event_name != 'merge_group'
         id: changes
         uses: ./.github/actions/detect-changes
+        with:
+          # On merge_group there is no PR base for paths-filter to auto-detect,
+          # so diff against the merge group base sha (the cumulative queued
+          # diff). Empty on pull_request keeps paths-filter's PR auto-detection.
+          base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
+      - name: Resolve release-PR author
+        id: release-author
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          # Externally influenced values are passed via env (never interpolated
+          # into the script body) to avoid shell injection from branch names.
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          # merge_group head ref looks like
+          # refs/heads/gh-readonly-queue/main/pr-271-<base_sha>; the PR number
+          # is the only author signal available in the queue.
+          MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          RELEASE_BOT="supabase-releaser[bot]"
+          AUTHOR=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # Defense in depth: require both the release branch and the bot.
+            if [ "$PR_HEAD_REF" = "changeset-release/main" ]; then
+              AUTHOR="$PR_AUTHOR"
+            fi
+          elif [ "$EVENT_NAME" = "merge_group" ]; then
+            PR_NUMBER=$(printf '%s' "$MERGE_GROUP_HEAD_REF" | sed -n 's#.*/pr-\([0-9]\{1,\}\)-.*#\1#p')
+            if [ -n "$PR_NUMBER" ]; then
+              AUTHOR=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.user.login' 2>/dev/null || echo "")
+            fi
+          fi
+          if [ "$AUTHOR" = "$RELEASE_BOT" ]; then
+            echo "is-release-author=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is-release-author=false" >> "$GITHUB_OUTPUT"
+          fi
 
   check-types:
     if: >-
-      github.event_name != 'pull_request' || (
-        github.event.pull_request.draft == false &&
-        needs.detect-changes.outputs.is-release-pr != 'true'
-      )
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     needs: detect-changes
     name: Check types
     runs-on: ubuntu-latest
@@ -75,10 +118,8 @@ jobs:
 
   format-and-lint:
     if: >-
-      github.event_name != 'pull_request' || (
-        github.event.pull_request.draft == false &&
-        needs.detect-changes.outputs.is-release-pr != 'true'
-      )
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     needs: detect-changes
     name: Format and lint
     runs-on: ubuntu-latest
@@ -92,10 +133,8 @@ jobs:
 
   knip:
     if: >-
-      github.event_name != 'pull_request' || (
-        github.event.pull_request.draft == false &&
-        needs.detect-changes.outputs.is-release-pr != 'true'
-      )
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     needs: detect-changes
     name: Knip
     runs-on: ubuntu-latest
@@ -113,12 +152,8 @@ jobs:
 
   pg-delta-unit:
     if: >-
-      (
-        github.event_name != 'pull_request' || (
-          github.event.pull_request.draft == false &&
-          needs.detect-changes.outputs.is-release-pr != 'true'
-        )
-      ) &&
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
       (needs.detect-changes.outputs.pg-delta == 'true' || needs.detect-changes.outputs.root == 'true')
     needs: detect-changes
     name: "pg-delta: Unit tests"
@@ -146,12 +181,8 @@ jobs:
 
   pg-delta-test-image-hash:
     if: >-
-      (
-        github.event_name != 'pull_request' || (
-          github.event.pull_request.draft == false &&
-          needs.detect-changes.outputs.is-release-pr != 'true'
-        )
-      ) &&
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
       (needs.detect-changes.outputs.pg-delta == 'true' || needs.detect-changes.outputs.root == 'true')
     needs: detect-changes
     name: "pg-delta: Compute test image hash"
@@ -265,12 +296,8 @@ jobs:
 
   pg-delta-integration:
     if: >-
-      (
-        github.event_name != 'pull_request' || (
-          github.event.pull_request.draft == false &&
-          github.event.pull_request.user.login != 'supabase-releaser[bot]'
-        )
-      ) &&
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
       (needs.detect-changes.outputs.pg-delta == 'true' || needs.detect-changes.outputs.root == 'true') &&
       !cancelled() &&
       (
@@ -487,12 +514,8 @@ jobs:
 
   pg-topo-tests:
     if: >-
-      (
-        github.event_name != 'pull_request' || (
-          github.event.pull_request.draft == false &&
-          needs.detect-changes.outputs.is-release-pr != 'true'
-        )
-      ) &&
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
       (needs.detect-changes.outputs.pg-topo == 'true' || needs.detect-changes.outputs.root == 'true')
     needs: detect-changes
     name: "pg-topo: Tests"
@@ -520,12 +543,8 @@ jobs:
 
   deno2-library-e2e:
     if: >-
-      (
-        github.event_name != 'pull_request' || (
-          github.event.pull_request.draft == false &&
-          needs.detect-changes.outputs.is-release-pr != 'true'
-        )
-      ) &&
+      needs.detect-changes.outputs.is-release-pr != 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false) &&
       (
         needs.detect-changes.outputs.pg-delta-package-json == 'true' ||
         needs.detect-changes.outputs.pg-topo-package-json == 'true'
@@ -548,6 +567,7 @@ jobs:
 
   release-preview:
     needs:
+      - detect-changes
       - check-types
       - format-and-lint
       - knip
@@ -556,7 +576,7 @@ jobs:
       - pg-delta-integration-pg17-compat
       - pg-topo-tests
       - deno2-library-e2e
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.detect-changes.outputs.is-release-pr != 'true'
     name: Release preview
     runs-on: ubuntu-latest
     steps:

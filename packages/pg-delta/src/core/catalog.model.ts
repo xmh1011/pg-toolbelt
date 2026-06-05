@@ -449,6 +449,8 @@ function normalizeCatalog(catalog: Catalog): Catalog {
       options: redactSensitiveOptionPairs(server.options),
       comment: server.comment,
       privileges: server.privileges,
+      wrapper_handler: server.wrapper_handler,
+      wrapper_validator: server.wrapper_validator,
     });
   });
 
@@ -457,6 +459,8 @@ function normalizeCatalog(catalog: Catalog): Catalog {
       user: mapping.user,
       server: mapping.server,
       options: redactSensitiveOptionPairs(mapping.options),
+      wrapper_handler: mapping.wrapper_handler,
+      wrapper_validator: mapping.wrapper_validator,
     });
   });
 
@@ -472,6 +476,8 @@ function normalizeCatalog(catalog: Catalog): Catalog {
         options: redactSensitiveOptionPairs(foreignTable.options),
         comment: foreignTable.comment,
         privileges: foreignTable.privileges,
+        wrapper_handler: foreignTable.wrapper_handler,
+        wrapper_validator: foreignTable.wrapper_validator,
       }),
   );
 

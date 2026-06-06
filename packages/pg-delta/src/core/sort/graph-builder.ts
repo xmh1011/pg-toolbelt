@@ -1,4 +1,6 @@
 import type { Change } from "../change.types.ts";
+import { AlterTableAlterColumnType } from "../objects/table/changes/table.alter.ts";
+import { stableId } from "../objects/utils.ts";
 import { findConsumerIndexes } from "./graph-utils.ts";
 import type {
   Constraint,
@@ -155,6 +157,18 @@ export function buildGraphData(
       if (options.invert) {
         for (const droppedId of changeItem.drops ?? []) {
           createdIds.add(droppedId);
+        }
+        // ALTER COLUMN TYPE rewrites the column in place. Treat it as a
+        // drop-phase producer of the column only for ordering, so main-catalog
+        // dependents drop before the rewrite without changing Change.drops.
+        if (changeItem instanceof AlterTableAlterColumnType) {
+          createdIds.add(
+            stableId.column(
+              changeItem.table.schema,
+              changeItem.table.name,
+              changeItem.column.name,
+            ),
+          );
         }
       }
       return createdIds;

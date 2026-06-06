@@ -136,15 +136,13 @@ for (const pgVersion of POSTGRES_VERSIONS) {
             WHERE age > 0;
         `,
           assertSqlStatements: (sqlStatements) => {
-            expect(sqlStatements).toMatchInlineSnapshot(`
-              [
-                "DROP VIEW public.alter_column_type_view_dependent_user_ages",
-                "ALTER TABLE public.alter_column_type_view_dependent_users ALTER COLUMN age TYPE integer USING age::integer",
-                "CREATE VIEW public.alter_column_type_view_dependent_user_ages AS SELECT id,
+            expect(sqlStatements.join(";\n")).toMatchInlineSnapshot(`
+              "DROP VIEW public.alter_column_type_view_dependent_user_ages;
+              ALTER TABLE public.alter_column_type_view_dependent_users ALTER COLUMN age TYPE integer USING age::integer;
+              CREATE VIEW public.alter_column_type_view_dependent_user_ages AS SELECT id,
                   age
                  FROM alter_column_type_view_dependent_users
-                WHERE (age > 0)",
-              ]
+                WHERE (age > 0)"
             `);
           },
         });

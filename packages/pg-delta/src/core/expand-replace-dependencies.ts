@@ -13,7 +13,10 @@ import { DropProcedure } from "./objects/procedure/changes/procedure.drop.ts";
 import { CreateCommentOnRlsPolicy } from "./objects/rls-policy/changes/rls-policy.comment.ts";
 import { CreateRlsPolicy } from "./objects/rls-policy/changes/rls-policy.create.ts";
 import { DropRlsPolicy } from "./objects/rls-policy/changes/rls-policy.drop.ts";
-import { AlterTableAddConstraint } from "./objects/table/changes/table.alter.ts";
+import {
+  AlterTableAddConstraint,
+  AlterTableAlterColumnType,
+} from "./objects/table/changes/table.alter.ts";
 import { CreateCommentOnConstraint } from "./objects/table/changes/table.comment.ts";
 import { CreateTable } from "./objects/table/changes/table.create.ts";
 import { DropTable } from "./objects/table/changes/table.drop.ts";
@@ -123,6 +126,16 @@ export function expandReplaceDependencies({
     }
   }
 
+  const promotedRlsPolicyIds = new Set<string>();
+  const additions: Change[] = collectColumnRewritePolicyReplacements({
+    changes,
+    mainCatalog,
+    branchCatalog,
+    createdIds,
+    droppedIds,
+    promotedRlsPolicyIds,
+  });
+
   // Procedure stableIds are signature-qualified
   // (`procedure:schema.name(argtypes)`), so a function whose parameter types
   // change has different ids in `createdIds` and `droppedIds` and would not
@@ -166,7 +179,7 @@ export function expandReplaceDependencies({
     }
   }
 
-  if (replaceRoots.size === 0) {
+  if (replaceRoots.size === 0 && additions.length === 0) {
     return {
       changes,
       replacedTableIds: new Set<string>(),
@@ -184,7 +197,6 @@ export function expandReplaceDependencies({
     list.add(dep.dependent_stable_id);
   }
 
-  const additions: Change[] = [];
   const visitedTargets = new Set<string>();
   const visitedRefs = new Set<string>(replaceRoots);
   const queue: string[] = [...replaceRoots];
@@ -257,6 +269,9 @@ export function expandReplaceDependencies({
       if (!replacementChanges) continue;
 
       additions.push(...replacementChanges);
+      if (resolved.kind === "rls_policy") {
+        promotedRlsPolicyIds.add(targetId);
+      }
 
       // If we added a DropTable(T) for an existing table, mark T so any
       // pre-existing object-scope AlterTable*(T) changes get dropped below —
@@ -281,9 +296,88 @@ export function expandReplaceDependencies({
   }
 
   return {
-    changes: [...changes, ...additions],
+    changes: [
+      ...removeSupersededRlsPolicyAlters(changes, promotedRlsPolicyIds),
+      ...additions,
+    ],
     replacedTableIds: tablesReplacedByExpansion,
   };
+}
+
+function collectColumnRewritePolicyReplacements({
+  changes,
+  mainCatalog,
+  branchCatalog,
+  createdIds,
+  droppedIds,
+  promotedRlsPolicyIds,
+}: {
+  changes: Change[];
+  mainCatalog: Catalog;
+  branchCatalog: Catalog;
+  createdIds: Set<string>;
+  droppedIds: Set<string>;
+  promotedRlsPolicyIds: Set<string>;
+}): Change[] {
+  const rewrittenColumnIds = new Set<string>();
+  for (const change of changes) {
+    if (!(change instanceof AlterTableAlterColumnType)) continue;
+    rewrittenColumnIds.add(
+      stableId.column(
+        change.table.schema,
+        change.table.name,
+        change.column.name,
+      ),
+    );
+  }
+  if (rewrittenColumnIds.size === 0) return [];
+
+  const replacements: Change[] = [];
+  for (const dep of mainCatalog.depends) {
+    if (!rewrittenColumnIds.has(dep.referenced_stable_id)) continue;
+
+    const targetId = normalizeDependentId(dep.dependent_stable_id);
+    if (!targetId?.startsWith("rlsPolicy:")) continue;
+    if (promotedRlsPolicyIds.has(targetId)) continue;
+    if (createdIds.has(targetId) && droppedIds.has(targetId)) continue;
+
+    const resolved = resolveObjectForStableId(
+      targetId,
+      mainCatalog,
+      branchCatalog,
+    );
+    if (!resolved || resolved.kind !== "rls_policy") continue;
+
+    const addDrop = !droppedIds.has(targetId);
+    const addCreate = !createdIds.has(targetId);
+    const replacementChanges = buildReplaceChanges(resolved, {
+      addDrop,
+      addCreate,
+    });
+    if (!replacementChanges) continue;
+
+    replacements.push(...replacementChanges);
+    promotedRlsPolicyIds.add(targetId);
+    for (const change of replacementChanges) {
+      for (const id of change.creates ?? []) createdIds.add(id);
+      for (const id of change.drops ?? []) droppedIds.add(id);
+    }
+  }
+
+  return replacements;
+}
+
+function removeSupersededRlsPolicyAlters(
+  changes: Change[],
+  promotedRlsPolicyIds: ReadonlySet<string>,
+): Change[] {
+  if (promotedRlsPolicyIds.size === 0) return changes;
+  return changes.filter((change) => {
+    if (change.objectType !== "rls_policy" || change.operation !== "alter") {
+      return true;
+    }
+    return !promotedRlsPolicyIds.has(change.policy.stableId);
+  });
 }
 
 function isOwnedSequenceColumnDependency(

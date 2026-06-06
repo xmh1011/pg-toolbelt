@@ -1,5 +1,10 @@
 import type { Catalog } from "./catalog.model.ts";
 import type { Change } from "./change.types.ts";
+import {
+  diffPrivileges,
+  emitColumnPrivilegeChanges,
+} from "./objects/base.privilege-diff.ts";
+import type { ObjectDiffContext } from "./objects/diff-context.ts";
 import { CreateDomain } from "./objects/domain/changes/domain.create.ts";
 import { DropDomain } from "./objects/domain/changes/domain.drop.ts";
 import { CreateIndex } from "./objects/index/changes/index.create.ts";
@@ -22,8 +27,16 @@ import { DropEnum } from "./objects/type/enum/changes/enum.drop.ts";
 import { CreateRange } from "./objects/type/range/changes/range.create.ts";
 import { DropRange } from "./objects/type/range/changes/range.drop.ts";
 import { stableId } from "./objects/utils.ts";
+import { AlterViewChangeOwner } from "./objects/view/changes/view.alter.ts";
+import { CreateCommentOnView } from "./objects/view/changes/view.comment.ts";
 import { CreateView } from "./objects/view/changes/view.create.ts";
 import { DropView } from "./objects/view/changes/view.drop.ts";
+import {
+  GrantViewPrivileges,
+  RevokeGrantOptionViewPrivileges,
+  RevokeViewPrivileges,
+} from "./objects/view/changes/view.privilege.ts";
+import { CreateSecurityLabelOnView } from "./objects/view/changes/view.security-label.ts";
 
 type ResolvedObject =
   | {
@@ -95,10 +108,15 @@ export function expandReplaceDependencies({
   changes,
   mainCatalog,
   branchCatalog,
+  diffContext,
 }: {
   changes: Change[];
   mainCatalog: Catalog;
   branchCatalog: Catalog;
+  diffContext?: Pick<
+    ObjectDiffContext,
+    "version" | "currentUser" | "defaultPrivilegeState"
+  >;
 }): ExpandReplaceDependenciesResult {
   const createdIds = new Set<string>();
   const droppedIds = new Set<string>();
@@ -244,6 +262,7 @@ export function expandReplaceDependencies({
       const replacementChanges = buildReplaceChanges(resolved, {
         addDrop,
         addCreate,
+        diffContext,
       });
       if (!replacementChanges) continue;
 
@@ -444,9 +463,16 @@ function resolveObjectForStableId(
 
 function buildReplaceChanges(
   resolved: ResolvedObject,
-  options: { addDrop: boolean; addCreate: boolean },
+  options: {
+    addDrop: boolean;
+    addCreate: boolean;
+    diffContext?: Pick<
+      ObjectDiffContext,
+      "version" | "currentUser" | "defaultPrivilegeState"
+    >;
+  },
 ): Change[] | null {
-  const { addDrop, addCreate } = options;
+  const { addDrop, addCreate, diffContext } = options;
 
   if (!addDrop && !addCreate) return null;
 
@@ -485,7 +511,9 @@ function buildReplaceChanges(
     case "view":
       return [
         ...(addDrop ? [new DropView({ view: resolved.main })] : []),
-        ...(addCreate ? [new CreateView({ view: resolved.branch })] : []),
+        ...(addCreate
+          ? buildCreateViewReplacementChanges(resolved.branch, diffContext)
+          : []),
       ];
     case "materialized_view":
       return [
@@ -572,4 +600,65 @@ function buildReplaceChanges(
     default:
       return null;
   }
+}
+
+function buildCreateViewReplacementChanges(
+  view: Catalog["views"][string],
+  diffContext:
+    | Pick<
+        ObjectDiffContext,
+        "version" | "currentUser" | "defaultPrivilegeState"
+      >
+    | undefined,
+): Change[] {
+  const changes: Change[] = [new CreateView({ view })];
+  if (!diffContext) return changes;
+
+  if (view.owner !== diffContext.currentUser) {
+    changes.push(new AlterViewChangeOwner({ view, owner: view.owner }));
+  }
+
+  if (view.comment !== null) {
+    changes.push(new CreateCommentOnView({ view }));
+  }
+
+  for (const securityLabel of view.security_labels) {
+    changes.push(new CreateSecurityLabelOnView({ view, securityLabel }));
+  }
+
+  const effectiveDefaults =
+    diffContext.defaultPrivilegeState.getEffectiveDefaults(
+      diffContext.currentUser,
+      "view",
+      view.schema ?? "",
+    );
+  const creatorFilteredDefaults =
+    view.owner !== diffContext.currentUser
+      ? effectiveDefaults.filter(
+          (privilege) => privilege.grantee !== diffContext.currentUser,
+        )
+      : effectiveDefaults;
+  const privilegeResults = diffPrivileges(
+    creatorFilteredDefaults,
+    view.privileges,
+    view.owner,
+  );
+
+  changes.push(
+    ...(emitColumnPrivilegeChanges(
+      privilegeResults,
+      view,
+      view,
+      "view",
+      {
+        Grant: GrantViewPrivileges,
+        Revoke: RevokeViewPrivileges,
+        RevokeGrantOption: RevokeGrantOptionViewPrivileges,
+      },
+      effectiveDefaults,
+      diffContext.version,
+    ) as Change[]),
+  );
+
+  return changes;
 }

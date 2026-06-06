@@ -229,6 +229,9 @@ export function diffCatalogs(
   }
   let filteredChanges = changes.filter((change) => {
     if (change.operation === "alter" && change.scope === "privilege") {
+      if ((change.creates ?? []).length > 0) {
+        return true;
+      }
       return !droppedObjectStableIds.has(getPrivilegeTargetStableId(change));
     }
     return true;
@@ -238,6 +241,7 @@ export function diffCatalogs(
     changes: filteredChanges,
     mainCatalog: main,
     branchCatalog: branch,
+    diffContext,
   });
   filteredChanges = normalizePostDiffChanges({
     changes: expandedDependencies.changes,

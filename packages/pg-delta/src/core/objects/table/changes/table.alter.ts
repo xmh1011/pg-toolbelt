@@ -651,6 +651,12 @@ export class AlterTableAlterColumnType extends AlterTableChange {
     ];
   }
 
+  get invalidates() {
+    return [
+      stableId.column(this.table.schema, this.table.name, this.column.name),
+    ];
+  }
+
   serialize(_options?: SerializeOptions): string {
     // previousColumn is optional so direct serializer tests/fixtures can keep
     // emitting canonical ALTER TYPE SQL without forcing a USING expression.

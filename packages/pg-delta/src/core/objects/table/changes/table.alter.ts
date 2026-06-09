@@ -652,6 +652,9 @@ export class AlterTableAlterColumnType extends AlterTableChange {
   }
 
   get invalidates() {
+    // ALTER COLUMN ... TYPE rewrites the column in place. The column keeps its
+    // identity, but anything bound to its old type (views, rules, etc.) must be
+    // dropped before the rewrite and rebuilt after, so report it as invalidated.
     return [
       stableId.column(this.table.schema, this.table.name, this.column.name),
     ];

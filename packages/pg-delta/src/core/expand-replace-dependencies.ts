@@ -618,6 +618,9 @@ function buildCreateViewReplacementChanges(
       >
     | undefined,
 ): Change[] {
+  // Dependency-closure replacements synthesize a create without going through
+  // `diffViews`, so replay the same owner/comment/security-label/ACL metadata
+  // that a normal non-alterable view replacement would emit.
   const changes: Change[] = [new CreateView({ view })];
   if (!diffContext) return changes;
 

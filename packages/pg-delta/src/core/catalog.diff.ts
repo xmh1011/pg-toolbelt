@@ -229,6 +229,8 @@ export function diffCatalogs(
   }
   let filteredChanges = changes.filter((change) => {
     if (change.operation === "alter" && change.scope === "privilege") {
+      // GRANTs for replacement-created objects look like privilege ALTERs, but
+      // they create ACL metadata that must survive the dropped-target filter.
       if ((change.creates ?? []).length > 0) {
         return true;
       }

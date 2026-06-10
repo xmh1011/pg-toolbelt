@@ -1,11 +1,13 @@
 import type { Catalog } from "./catalog.model.ts";
 import type { Change } from "./change.types.ts";
+import type { ObjectDiffContext } from "./objects/diff-context.ts";
 import { CreateDomain } from "./objects/domain/changes/domain.create.ts";
 import { DropDomain } from "./objects/domain/changes/domain.drop.ts";
 import { CreateIndex } from "./objects/index/changes/index.create.ts";
 import { DropIndex } from "./objects/index/changes/index.drop.ts";
 import { CreateMaterializedView } from "./objects/materialized-view/changes/materialized-view.create.ts";
 import { DropMaterializedView } from "./objects/materialized-view/changes/materialized-view.drop.ts";
+import { buildCreateMaterializedViewChanges } from "./objects/materialized-view/materialized-view.diff.ts";
 import { CreateProcedure } from "./objects/procedure/changes/procedure.create.ts";
 import { DropProcedure } from "./objects/procedure/changes/procedure.drop.ts";
 import { CreateCommentOnRlsPolicy } from "./objects/rls-policy/changes/rls-policy.comment.ts";
@@ -24,6 +26,7 @@ import { DropRange } from "./objects/type/range/changes/range.drop.ts";
 import { stableId } from "./objects/utils.ts";
 import { CreateView } from "./objects/view/changes/view.create.ts";
 import { DropView } from "./objects/view/changes/view.drop.ts";
+import { buildCreateViewChanges } from "./objects/view/view.diff.ts";
 
 type ResolvedObject =
   | {
@@ -95,10 +98,15 @@ export function expandReplaceDependencies({
   changes,
   mainCatalog,
   branchCatalog,
+  diffContext,
 }: {
   changes: Change[];
   mainCatalog: Catalog;
   branchCatalog: Catalog;
+  diffContext?: Pick<
+    ObjectDiffContext,
+    "version" | "currentUser" | "defaultPrivilegeState"
+  >;
 }): ExpandReplaceDependenciesResult {
   const createdIds = new Set<string>();
   const droppedIds = new Set<string>();
@@ -244,6 +252,7 @@ export function expandReplaceDependencies({
       const replacementChanges = buildReplaceChanges(resolved, {
         addDrop,
         addCreate,
+        diffContext,
       });
       if (!replacementChanges) continue;
 
@@ -444,9 +453,16 @@ function resolveObjectForStableId(
 
 function buildReplaceChanges(
   resolved: ResolvedObject,
-  options: { addDrop: boolean; addCreate: boolean },
+  options: {
+    addDrop: boolean;
+    addCreate: boolean;
+    diffContext?: Pick<
+      ObjectDiffContext,
+      "version" | "currentUser" | "defaultPrivilegeState"
+    >;
+  },
 ): Change[] | null {
-  const { addDrop, addCreate } = options;
+  const { addDrop, addCreate, diffContext } = options;
 
   if (!addDrop && !addCreate) return null;
 
@@ -485,7 +501,9 @@ function buildReplaceChanges(
     case "view":
       return [
         ...(addDrop ? [new DropView({ view: resolved.main })] : []),
-        ...(addCreate ? [new CreateView({ view: resolved.branch })] : []),
+        ...(addCreate
+          ? buildCreateViewReplacementChanges(resolved.branch, diffContext)
+          : []),
       ];
     case "materialized_view":
       return [
@@ -493,7 +511,13 @@ function buildReplaceChanges(
           ? [new DropMaterializedView({ materializedView: resolved.main })]
           : []),
         ...(addCreate
-          ? [new CreateMaterializedView({ materializedView: resolved.branch })]
+          ? diffContext
+            ? buildCreateMaterializedViewChanges(diffContext, resolved.branch)
+            : [
+                new CreateMaterializedView({
+                  materializedView: resolved.branch,
+                }),
+              ]
           : []),
       ];
     case "index":
@@ -572,4 +596,21 @@ function buildReplaceChanges(
     default:
       return null;
   }
+}
+
+function buildCreateViewReplacementChanges(
+  view: Catalog["views"][string],
+  diffContext:
+    | Pick<
+        ObjectDiffContext,
+        "version" | "currentUser" | "defaultPrivilegeState"
+      >
+    | undefined,
+): Change[] {
+  // Dependency-closure replacements synthesize a create without going through
+  // `diffViews`, so replay the same owner/comment/security-label/ACL metadata
+  // that a normal non-alterable view replacement would emit.
+  return diffContext
+    ? buildCreateViewChanges(diffContext, view)
+    : [new CreateView({ view })];
 }

@@ -551,6 +551,55 @@ const extractCreatePublicationDependencies = (
   return { provides, requires };
 };
 
+const addPublicationObjectDependencies = (
+  objects: unknown,
+  requires: ObjectRef[],
+): void => {
+  const publicationObjects = Array.isArray(objects) ? objects : [];
+  for (const objectNode of publicationObjects) {
+    const publicationObjSpec = asRecord(
+      asRecord(objectNode)?.PublicationObjSpec,
+    );
+    if (!publicationObjSpec) {
+      continue;
+    }
+    if (publicationObjSpec.pubobjtype === "PUBLICATIONOBJ_TABLE") {
+      const relation = asRecord(
+        asRecord(publicationObjSpec.pubtable)?.relation,
+      );
+      const tableRef = relationFromRangeVarNode(relation, "table");
+      if (tableRef) {
+        requires.push(tableRef);
+      }
+    }
+    if (
+      publicationObjSpec.pubobjtype === "PUBLICATIONOBJ_TABLES_IN_SCHEMA" &&
+      typeof publicationObjSpec.name === "string"
+    ) {
+      requires.push(createObjectRefFromAst("schema", publicationObjSpec.name));
+    }
+  }
+};
+
+const extractAlterPublicationDependencies = (
+  statementNode: Record<string, unknown>,
+): ExtractDependenciesResult => {
+  const requires: ObjectRef[] = [];
+
+  if (typeof statementNode.pubname === "string") {
+    requires.push(createObjectRefFromAst("publication", statementNode.pubname));
+  }
+
+  if (
+    statementNode.action === "AP_AddObjects" ||
+    statementNode.action === "AP_SetObjects"
+  ) {
+    addPublicationObjectDependencies(statementNode.pubobjects, requires);
+  }
+
+  return { provides: [], requires };
+};
+
 const extractCreateLanguageDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -618,6 +667,32 @@ const extractCreateSubscriptionDependencies = (
   }
 
   return { provides, requires };
+};
+
+const extractAlterSubscriptionDependencies = (
+  statementNode: Record<string, unknown>,
+): ExtractDependenciesResult => {
+  const requires: ObjectRef[] = [];
+
+  if (typeof statementNode.subname === "string") {
+    requires.push(
+      createObjectRefFromAst("subscription", statementNode.subname),
+    );
+  }
+
+  if (statementNode.kind === "ALTER_SUBSCRIPTION_SET_PUBLICATION") {
+    const publications = Array.isArray(statementNode.publication)
+      ? statementNode.publication
+      : [];
+    for (const publicationNode of publications) {
+      const publicationName = extractStringValue(publicationNode);
+      if (publicationName) {
+        requires.push(createObjectRefFromAst("publication", publicationName));
+      }
+    }
+  }
+
+  return { provides: [], requires };
 };
 
 const extractCreateEventTriggerDependencies = (
@@ -997,9 +1072,17 @@ const extractDependencyRefs = (
       return extractCreatePublicationDependencies(
         asRecord(astNode.CreatePublicationStmt) ?? {},
       );
+    case "ALTER_PUBLICATION":
+      return extractAlterPublicationDependencies(
+        asRecord(astNode.AlterPublicationStmt) ?? {},
+      );
     case "CREATE_SUBSCRIPTION":
       return extractCreateSubscriptionDependencies(
         asRecord(astNode.CreateSubscriptionStmt) ?? {},
+      );
+    case "ALTER_SUBSCRIPTION":
+      return extractAlterSubscriptionDependencies(
+        asRecord(astNode.AlterSubscriptionStmt) ?? {},
       );
     case "CREATE_DOMAIN": {
       const createDomain = asRecord(astNode.CreateDomainStmt);

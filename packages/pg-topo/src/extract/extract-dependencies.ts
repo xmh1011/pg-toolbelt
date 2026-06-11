@@ -4,6 +4,7 @@ import {
   createObjectRefFromAst,
   DEFAULT_SCHEMA,
   dedupeObjectRefs,
+  isBuiltInObjectRef,
   SHELL_TYPE_SIGNATURE,
   splitQualifiedName,
 } from "../model/object-ref.ts";
@@ -852,11 +853,14 @@ const builtInOperatorClassSupportOperatorNames = new Set([
 
 const isBuiltInOperatorClassSupportOperatorName = (
   nameParts: string[],
+  args: (ObjectRef | null)[],
 ): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
   return (
     nameParts.length === 1 &&
-    Boolean(name && builtInOperatorClassSupportOperatorNames.has(name))
+    Boolean(name && builtInOperatorClassSupportOperatorNames.has(name)) &&
+    args.length > 0 &&
+    args.every((argRef) => argRef !== null && isBuiltInObjectRef(argRef))
   );
 };
 
@@ -881,6 +885,19 @@ const baseTypeTypeOptionNames = new Set(["like"]);
 const typeSignaturePart = (typeRef: ObjectRef): string =>
   typeRef.schema ? `${typeRef.schema}.${typeRef.name}` : typeRef.name;
 
+const objectWithArgsTypeRefs = (
+  objectWithArgs: unknown,
+): (ObjectRef | null)[] => {
+  const objectWithArgsRecord = asRecord(objectWithArgs);
+  const args = Array.isArray(objectWithArgsRecord?.objargs)
+    ? objectWithArgsRecord.objargs
+    : [];
+
+  return args.map((argNode) =>
+    typeFromTypeNameNode(asRecord(argNode)?.TypeName),
+  );
+};
+
 const objectWithArgsRef = (
   kind: ObjectRef["kind"],
   objectWithArgs: unknown,
@@ -898,17 +915,14 @@ const objectWithArgsRef = (
     return null;
   }
 
-  const args = Array.isArray(objectWithArgsRecord.objargs)
-    ? objectWithArgsRecord.objargs
-    : [];
+  const args = objectWithArgsTypeRefs(objectWithArgsRecord);
   if (args.length === 0) {
     return baseRef;
   }
 
-  const signatureParts = args.map((argNode) => {
-    const typeRef = typeFromTypeNameNode(asRecord(argNode)?.TypeName);
-    return typeRef ? typeSignaturePart(typeRef) : "unknown";
-  });
+  const signatureParts = args.map((argRef) =>
+    argRef ? typeSignaturePart(argRef) : "unknown",
+  );
 
   return createObjectRefFromAst(
     kind,
@@ -1156,7 +1170,12 @@ const extractCreateOperatorClassDependencies = (
     const nameParts = extractNameParts(itemName?.objname);
 
     if (item.itemtype === OPCLASS_ITEM_OPERATOR) {
-      if (isBuiltInOperatorClassSupportOperatorName(nameParts)) {
+      if (
+        isBuiltInOperatorClassSupportOperatorName(
+          nameParts,
+          objectWithArgsTypeRefs(itemName),
+        )
+      ) {
         continue;
       }
 

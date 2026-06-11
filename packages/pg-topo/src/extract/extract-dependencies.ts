@@ -43,6 +43,11 @@ const typeProviderRefs = (typeRef: ObjectRef): ObjectRef[] => [
   createObjectRefFromAst("type", `${typeRef.name}[]`, typeRef.schema),
 ];
 
+const relationRowTypeProviderRefs = (relationRef: ObjectRef): ObjectRef[] =>
+  typeProviderRefs(
+    createObjectRefFromAst("type", relationRef.name, relationRef.schema),
+  );
+
 const extractCreateTableDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -52,6 +57,7 @@ const extractCreateTableDependencies = (
   const tableRef = relationFromRangeVarNode(relation, "table");
   if (tableRef) {
     provides.push(tableRef);
+    provides.push(...relationRowTypeProviderRefs(tableRef));
     addSchemaDependencyIfNeeded(relation?.schemaname, requires);
   }
 
@@ -156,6 +162,9 @@ const extractCreateTableAsDependencies = (
     provides.push(
       createObjectRefFromAst(kind, relationRef.name, relationRef.schema),
     );
+    if (kind === "table") {
+      provides.push(...relationRowTypeProviderRefs(relationRef));
+    }
     if (relationRef.schema) {
       requires.push(createObjectRefFromAst("schema", relationRef.schema));
     }
@@ -737,36 +746,15 @@ const extractCreateCollationDependencies = (
 
 const rangeFunctionOptionNames = new Set(["canonical", "subtype_diff"]);
 
-// PostgreSQL documents float8mi as the built-in subtype_diff helper for
-// custom float ranges. Other unqualified support functions remain dependencies
-// so custom routines still order before the range type that uses them.
-const builtInRangeSupportFunctionNames = new Set(["float8mi"]);
-
-const isFloat8TypeRef = (typeRef: ObjectRef | null): boolean => {
-  if (!typeRef || typeRef.kind !== "type") {
-    return false;
-  }
-  return typeRef.name.toLowerCase() === "float8" && isBuiltInObjectRef(typeRef);
-};
-
-const isBuiltInRangeSupportFunctionName = (
-  nameParts: string[],
-  subtypeRef: ObjectRef | null,
-): boolean => {
-  const name = nameParts.at(-1)?.toLowerCase();
-  if (!name || !builtInRangeSupportFunctionNames.has(name)) {
-    return false;
-  }
-
-  if (nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog") {
-    return true;
-  }
-
-  // Unqualified float8mi is pg_catalog's helper only for float8 subtypes. For
-  // other subtypes it can resolve to a user-defined overload and must stay as a
-  // dependency.
-  return nameParts.length === 1 && isFloat8TypeRef(subtypeRef);
-};
+const builtInRangeSupportFunctionSignatures = new Map<string, string[][]>([
+  ["daterange_subdiff", [["date", "date"]]],
+  ["float8mi", [["float8", "float8"]]],
+  ["int4range_subdiff", [["int4", "int4"]]],
+  ["int8range_subdiff", [["int8", "int8"]]],
+  ["numrange_subdiff", [["numeric", "numeric"]]],
+  ["tsrange_subdiff", [["timestamp", "timestamp"]]],
+  ["tstzrange_subdiff", [["timestamptz", "timestamptz"]]],
+]);
 
 // PostgreSQL standard/predefined collations live in pg_catalog. User collations
 // with the same name still need a dependency when explicitly schema-qualified.
@@ -873,6 +861,34 @@ const typeRefMatchesBuiltInNames = (
   }
   return (
     isBuiltInObjectRef(typeRef) && names.includes(typeRef.name.toLowerCase())
+  );
+};
+
+const isBuiltInRangeSupportFunctionName = (
+  nameParts: string[],
+  args: (ObjectRef | null)[],
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name) {
+    return false;
+  }
+  const builtInSignatures = builtInRangeSupportFunctionSignatures.get(name);
+  if (!builtInSignatures) {
+    return false;
+  }
+  if (
+    nameParts.length !== 1 &&
+    !(nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog")
+  ) {
+    return false;
+  }
+
+  return builtInSignatures.some(
+    (signature) =>
+      args.length === signature.length &&
+      signature.every((typeName, index) =>
+        typeRefMatchesBuiltInNames(args[index] ?? null, [typeName]),
+      ),
   );
 };
 
@@ -1437,17 +1453,24 @@ const extractCreateRangeDependencies = (
 
     if (rangeFunctionOptionNames.has(optionName)) {
       const functionNameParts = extractNameParts(typeName?.names);
-      if (isBuiltInRangeSupportFunctionName(functionNameParts, subtypeRef)) {
-        continue;
-      }
-
+      const functionArgs = rangeFunctionArgs(optionName, rangeRef, subtypeRef);
       const functionRef = objectRefFromNamePartsWithArgs(
         "function",
         functionNameParts,
-        rangeFunctionArgs(optionName, rangeRef, subtypeRef),
+        functionArgs,
       );
       if (functionRef) {
-        requires.push(markExactSignatureRef(functionRef));
+        const exactFunctionRef = markExactSignatureRef(functionRef);
+        if (
+          isBuiltInRangeSupportFunctionName(functionNameParts, functionArgs)
+        ) {
+          if (functionNameParts.length === 1) {
+            requires.push(markOmitIfNoLocalProducerRef(exactFunctionRef));
+          }
+          continue;
+        }
+
+        requires.push(exactFunctionRef);
       }
     }
   }

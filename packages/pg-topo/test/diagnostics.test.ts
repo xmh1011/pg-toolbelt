@@ -55,6 +55,34 @@ describe("diagnostics", () => {
     expect(unresolved).toBeDefined();
   });
 
+  test("reports unresolved table for ALTER PUBLICATION DROP TABLE", async () => {
+    const result = await analyzeAndSort([
+      "alter publication pub_orders drop table public.orders;",
+      "create publication pub_orders;",
+    ]);
+    const unresolved = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.details?.requiredObjectKey === "table:public:orders:",
+    );
+
+    expect(unresolved).toBeDefined();
+  });
+
+  test("reports unresolved schema for ALTER PUBLICATION DROP TABLES IN SCHEMA", async () => {
+    const result = await analyzeAndSort([
+      "alter publication pub_sales drop tables in schema sales;",
+      "create publication pub_sales;",
+    ]);
+    const unresolved = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.details?.requiredObjectKey === "schema::sales:",
+    );
+
+    expect(unresolved).toBeDefined();
+  });
+
   test("cycle diagnostics include statement participants", async () => {
     const result = await analyzeAndSort([
       "create view public.v1 as select * from public.v2;",

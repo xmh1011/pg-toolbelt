@@ -137,6 +137,65 @@ describe("analyzeAndSort", () => {
     expect(hasUnknownClass).toBe(false);
   });
 
+  test("orders ALTER PUBLICATION DROP TABLE after referenced publication and table", async () => {
+    const result = await analyzeAndSort([
+      "alter publication pub_orders drop table public.orders;",
+      "create publication pub_orders;",
+      "create table public.orders(id int primary key);",
+    ]);
+    const orderedClasses = result.ordered.map(
+      (statement) => statement.statementClass,
+    );
+    const hasUnknownClass = result.diagnostics.some(
+      (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
+    );
+
+    expect(orderedClasses).toEqual([
+      "CREATE_TABLE",
+      "CREATE_PUBLICATION",
+      "ALTER_PUBLICATION",
+    ]);
+    expect(
+      result.graph.edges.some(
+        (edge) =>
+          edge.reason === "requires" &&
+          edge.objectRef?.kind === "table" &&
+          edge.objectRef.schema === "public" &&
+          edge.objectRef.name === "orders",
+      ),
+    ).toBe(true);
+    expect(hasUnknownClass).toBe(false);
+  });
+
+  test("orders ALTER PUBLICATION DROP TABLES IN SCHEMA after referenced publication and schema", async () => {
+    const result = await analyzeAndSort([
+      "alter publication pub_sales drop tables in schema sales;",
+      "create publication pub_sales;",
+      "create schema sales;",
+    ]);
+    const orderedClasses = result.ordered.map(
+      (statement) => statement.statementClass,
+    );
+    const hasUnknownClass = result.diagnostics.some(
+      (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
+    );
+
+    expect(orderedClasses).toEqual([
+      "CREATE_SCHEMA",
+      "CREATE_PUBLICATION",
+      "ALTER_PUBLICATION",
+    ]);
+    expect(
+      result.graph.edges.some(
+        (edge) =>
+          edge.reason === "requires" &&
+          edge.objectRef?.kind === "schema" &&
+          edge.objectRef.name === "sales",
+      ),
+    ).toBe(true);
+    expect(hasUnknownClass).toBe(false);
+  });
+
   test("orders ALTER SUBSCRIPTION SET PUBLICATION after referenced subscription and publications", async () => {
     const result = await analyzeAndSort([
       "alter subscription sub_orders set publication pub_events;",

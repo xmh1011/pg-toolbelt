@@ -592,6 +592,7 @@ const extractAlterPublicationDependencies = (
 
   if (
     statementNode.action === "AP_AddObjects" ||
+    statementNode.action === "AP_DropObjects" ||
     statementNode.action === "AP_SetObjects"
   ) {
     addPublicationObjectDependencies(statementNode.pubobjects, requires);

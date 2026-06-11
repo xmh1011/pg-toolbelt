@@ -4,8 +4,9 @@ import {
   statementClassAstNode,
 } from "./classify/classify-statement.ts";
 import {
+  defaultBtreeOperatorClassProviderRefForSubtype,
   extractDependencies,
-  implicitRangeSubtypeOperatorClassRef,
+  omittedRangeSubtypeOperatorClassSubtypeRef,
 } from "./extract/extract-dependencies.ts";
 import { buildGraph, type EdgeMetadata } from "./graph/build-graph.ts";
 import { compareStatementIndices, topoSort } from "./graph/topo-sort.ts";
@@ -64,12 +65,6 @@ const addImplicitRangeOperatorClassDependencies = (
   statementNodes: StatementNode[],
   parsedStatements: ParsedStatement[],
 ): void => {
-  const providedKeys = new Set(
-    statementNodes
-      .flatMap((statementNode) => statementNode.provides)
-      .map(objectRefKey),
-  );
-
   for (let index = 0; index < statementNodes.length; index += 1) {
     const statementNode = statementNodes[index];
     const parsedStatement = parsedStatements[index];
@@ -81,14 +76,31 @@ const addImplicitRangeOperatorClassDependencies = (
       continue;
     }
 
-    const rangeOperatorClassRef = implicitRangeSubtypeOperatorClassRef(
+    const subtypeRef = omittedRangeSubtypeOperatorClassSubtypeRef(
       parsedStatement.ast,
     );
-    if (
-      rangeOperatorClassRef &&
-      providedKeys.has(objectRefKey(rangeOperatorClassRef))
-    ) {
-      statementNode.requires.push(rangeOperatorClassRef);
+    if (!subtypeRef) {
+      continue;
+    }
+
+    const rangeOperatorClassRefs = new Map<
+      string,
+      ReturnType<typeof defaultBtreeOperatorClassProviderRefForSubtype>
+    >();
+    for (const providerStatement of parsedStatements) {
+      const providerRef = defaultBtreeOperatorClassProviderRefForSubtype(
+        providerStatement.ast,
+        subtypeRef,
+      );
+      if (providerRef) {
+        rangeOperatorClassRefs.set(objectRefKey(providerRef), providerRef);
+      }
+    }
+
+    for (const providerRef of rangeOperatorClassRefs.values()) {
+      if (providerRef) {
+        statementNode.requires.push(providerRef);
+      }
     }
   }
 };

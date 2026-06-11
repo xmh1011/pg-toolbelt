@@ -893,6 +893,24 @@ const isBuiltInRangeOperatorClassName = (
   return typeRefMatchesBuiltInNames(subtypeRef, expectedSubtypes);
 };
 
+const builtInBtreeOperatorFamilyNames = new Set([
+  ...builtInRangeOperatorClassNames,
+  "float_ops",
+]);
+
+const isBuiltInBtreeOperatorFamilyName = (nameParts: string[]): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name || !builtInBtreeOperatorFamilyNames.has(name)) {
+    return false;
+  }
+
+  if (nameParts.length === 1) {
+    return true;
+  }
+
+  return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
+};
+
 // Opclass items commonly reference pg_catalog support objects without schema
 // qualification. Keep those out of dependency resolution while still requiring
 // user-defined unqualified support items such as <# or app.cmp(...).
@@ -1099,24 +1117,21 @@ const rangeSubtypeRef = (params: unknown[]): ObjectRef | null => {
   return null;
 };
 
-const defaultBtreeOperatorClassRefForRangeSubtype = (
-  subtypeRef: ObjectRef | null,
-): ObjectRef | null => {
-  if (!subtypeRef || isBuiltInObjectRef(subtypeRef)) {
-    return null;
+const objectRefsSameObject = (
+  left: ObjectRef | null,
+  right: ObjectRef | null,
+): boolean => {
+  if (!left || !right || left.kind !== right.kind) {
+    return false;
   }
 
-  // PostgreSQL resolves omitted SUBTYPE_OPCLASS as the subtype's default btree
-  // opclass. User-defined type support SQL conventionally creates name_ops.
-  return createObjectRefFromAst(
-    "operator_class",
-    `${subtypeRef.name}_ops`,
-    subtypeRef.schema,
-    "btree",
+  return (
+    (left.schema ?? DEFAULT_SCHEMA) === (right.schema ?? DEFAULT_SCHEMA) &&
+    left.name === right.name
   );
 };
 
-export const implicitRangeSubtypeOperatorClassRef = (
+export const omittedRangeSubtypeOperatorClassSubtypeRef = (
   statementNode: unknown,
 ): ObjectRef | null => {
   const statementRecord = asRecord(statementNode);
@@ -1140,7 +1155,52 @@ export const implicitRangeSubtypeOperatorClassRef = (
     }
   }
 
-  return defaultBtreeOperatorClassRefForRangeSubtype(subtypeRef);
+  if (!subtypeRef || isBuiltInObjectRef(subtypeRef)) {
+    return null;
+  }
+
+  return subtypeRef;
+};
+
+export const defaultBtreeOperatorClassProviderRefForSubtype = (
+  statementNode: unknown,
+  subtypeRef: ObjectRef,
+): ObjectRef | null => {
+  const statementRecord = asRecord(statementNode);
+  const opClassStatement =
+    asRecord(statementRecord?.CreateOpClassStmt) ?? statementRecord;
+  if (!opClassStatement) {
+    return null;
+  }
+
+  if (opClassStatement.isDefault !== true) {
+    return null;
+  }
+
+  if (
+    typeof opClassStatement.amname !== "string" ||
+    opClassStatement.amname.toLowerCase() !== "btree"
+  ) {
+    return null;
+  }
+
+  const dataTypeRef = typeFromTypeNameNode(opClassStatement.datatype);
+  if (!objectRefsSameObject(dataTypeRef, subtypeRef)) {
+    return null;
+  }
+
+  const operatorClassRef = objectFromNameParts(
+    "operator_class",
+    extractNameParts(opClassStatement.opclassname),
+  );
+  return operatorClassRef
+    ? createObjectRefFromAst(
+        "operator_class",
+        operatorClassRef.name,
+        operatorClassRef.schema,
+        "btree",
+      )
+    : null;
 };
 
 const extractCreateRangeDependencies = (
@@ -1310,9 +1370,49 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   string[][]
 >([
   ["int2eq", [["int2", "int2"]]],
+  ["int2ge", [["int2", "int2"]]],
+  ["int2gt", [["int2", "int2"]]],
+  ["int2le", [["int2", "int2"]]],
+  ["int2lt", [["int2", "int2"]]],
+  ["int2ne", [["int2", "int2"]]],
   ["int4eq", [["int4", "int4"]]],
+  ["int4ge", [["int4", "int4"]]],
+  ["int4gt", [["int4", "int4"]]],
+  ["int4le", [["int4", "int4"]]],
+  ["int4lt", [["int4", "int4"]]],
+  ["int4ne", [["int4", "int4"]]],
   ["int8eq", [["int8", "int8"]]],
+  ["int8ge", [["int8", "int8"]]],
+  ["int8gt", [["int8", "int8"]]],
+  ["int8le", [["int8", "int8"]]],
+  ["int8lt", [["int8", "int8"]]],
+  ["int8ne", [["int8", "int8"]]],
 ]);
+
+const operatorEstimatorFunctionArgs = (
+  optionName: string,
+): ObjectRef[] | null => {
+  if (optionName === "restrict") {
+    return [
+      createObjectRefFromAst("type", "internal"),
+      createObjectRefFromAst("type", "oid"),
+      createObjectRefFromAst("type", "internal"),
+      createObjectRefFromAst("type", "int4"),
+    ];
+  }
+
+  if (optionName === "join") {
+    return [
+      createObjectRefFromAst("type", "internal"),
+      createObjectRefFromAst("type", "oid"),
+      createObjectRefFromAst("type", "internal"),
+      createObjectRefFromAst("type", "int2"),
+      createObjectRefFromAst("type", "internal"),
+    ];
+  }
+
+  return null;
+};
 
 const isBuiltInOperatorEstimatorFunctionName = (
   nameParts: string[],
@@ -1399,9 +1499,10 @@ const extractCreateOperatorDependencies = (
         continue;
       }
 
-      const estimatorFunctionRef = objectFromNameParts(
+      const estimatorFunctionRef = objectRefFromNamePartsWithArgs(
         "function",
         estimatorFunctionNameParts,
+        operatorEstimatorFunctionArgs(optionName) ?? [],
       );
       if (estimatorFunctionRef) {
         requires.push(estimatorFunctionRef);
@@ -1587,7 +1688,11 @@ const extractCreateOperatorClassDependencies = (
         "operator_family",
         extractNameParts(item.order_family),
       );
-      if (orderFamilyRef) {
+      const orderFamilyNameParts = extractNameParts(item.order_family);
+      if (
+        orderFamilyRef &&
+        !isBuiltInBtreeOperatorFamilyName(orderFamilyNameParts)
+      ) {
         requires.push(
           createObjectRefFromAst(
             "operator_family",
@@ -1651,6 +1756,45 @@ const extractCreateOperatorClassDependencies = (
   return { provides, requires };
 };
 
+const baseTypeFunctionArgs = (
+  optionName: string,
+  typeRef: ObjectRef | null,
+): ObjectRef[] | null => {
+  if (!typeRef) {
+    return null;
+  }
+
+  if (optionName === "input") {
+    return [createObjectRefFromAst("type", "cstring")];
+  }
+
+  if (optionName === "output") {
+    return [typeRef];
+  }
+
+  if (optionName === "receive") {
+    return [createObjectRefFromAst("type", "internal")];
+  }
+
+  if (optionName === "send") {
+    return [typeRef];
+  }
+
+  if (optionName === "typmod_in") {
+    return [createObjectRefFromAst("type", "cstring[]")];
+  }
+
+  if (optionName === "typmod_out") {
+    return [createObjectRefFromAst("type", "int4")];
+  }
+
+  if (optionName === "analyze" || optionName === "subscript") {
+    return [createObjectRefFromAst("type", "internal")];
+  }
+
+  return null;
+};
+
 const extractCreateBaseTypeDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -1696,7 +1840,14 @@ const extractCreateBaseTypeDependencies = (
       extractNameParts(functionTypeName?.names),
     );
     if (functionRef) {
-      requires.push(functionRef);
+      requires.push(
+        createObjectRefFromAst(
+          "function",
+          functionRef.name,
+          functionRef.schema,
+          typeRefsSignature(baseTypeFunctionArgs(optionName, typeRef) ?? []),
+        ),
+      );
     }
   }
 

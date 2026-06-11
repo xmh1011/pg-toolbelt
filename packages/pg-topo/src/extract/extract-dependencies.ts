@@ -901,11 +901,17 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   string[][]
 >([
   ["btfloat4cmp", [["float4", "float4"]]],
+  ["btfloat4sortsupport", [["internal"]]],
   ["btfloat8cmp", [["float8", "float8"]]],
+  ["btfloat8sortsupport", [["internal"]]],
   ["btint2cmp", [["int2", "int2"]]],
+  ["btint2sortsupport", [["internal"]]],
   ["btint4cmp", [["int4", "int4"]]],
+  ["btint4sortsupport", [["internal"]]],
   ["btint8cmp", [["int8", "int8"]]],
+  ["btint8sortsupport", [["internal"]]],
   ["bttextcmp", [["text", "text"]]],
+  ["bttextsortsupport", [["internal"]]],
 ]);
 
 const isBuiltInOperatorClassSupportFunctionName = (
@@ -984,7 +990,7 @@ const baseTypeFunctionOptionNames = new Set([
   "subscript",
 ]);
 
-const baseTypeTypeOptionNames = new Set(["like"]);
+const baseTypeTypeOptionNames = new Set(["like", "element"]);
 
 const typeSignaturePart = (typeRef: ObjectRef): string =>
   typeRef.schema ? `${typeRef.schema}.${typeRef.name}` : typeRef.name;
@@ -1039,6 +1045,43 @@ const objectWithArgsRef = (
   );
 };
 
+const objectRefFromNamePartsWithArgs = (
+  kind: ObjectRef["kind"],
+  nameParts: string[],
+  args: (ObjectRef | null)[],
+): ObjectRef | null => {
+  const baseRef = objectFromNameParts(kind, nameParts);
+  if (!baseRef) {
+    return null;
+  }
+  if (args.length === 0) {
+    return baseRef;
+  }
+
+  return createObjectRefFromAst(
+    kind,
+    baseRef.name,
+    baseRef.schema,
+    typeRefsSignature(args),
+  );
+};
+
+const rangeFunctionArgs = (
+  optionName: string,
+  rangeRef: ObjectRef | null,
+  subtypeRef: ObjectRef | null,
+): (ObjectRef | null)[] => {
+  if (optionName === "canonical") {
+    return rangeRef ? [rangeRef] : [];
+  }
+
+  if (optionName === "subtype_diff") {
+    return subtypeRef ? [subtypeRef, subtypeRef] : [];
+  }
+
+  return [];
+};
+
 const rangeSubtypeRef = (params: unknown[]): ObjectRef | null => {
   for (const paramNode of params) {
     const defElem = asRecord(asRecord(paramNode)?.DefElem);
@@ -1054,6 +1097,50 @@ const rangeSubtypeRef = (params: unknown[]): ObjectRef | null => {
   }
 
   return null;
+};
+
+const defaultBtreeOperatorClassRefForRangeSubtype = (
+  subtypeRef: ObjectRef | null,
+): ObjectRef | null => {
+  if (!subtypeRef || isBuiltInObjectRef(subtypeRef)) {
+    return null;
+  }
+
+  // PostgreSQL resolves omitted SUBTYPE_OPCLASS as the subtype's default btree
+  // opclass. User-defined type support SQL conventionally creates name_ops.
+  return createObjectRefFromAst(
+    "operator_class",
+    `${subtypeRef.name}_ops`,
+    subtypeRef.schema,
+    "btree",
+  );
+};
+
+export const implicitRangeSubtypeOperatorClassRef = (
+  statementNode: unknown,
+): ObjectRef | null => {
+  const statementRecord = asRecord(statementNode);
+  if (!statementRecord) {
+    return null;
+  }
+
+  const rangeStatement =
+    asRecord(statementRecord.CreateRangeStmt) ?? statementRecord;
+  const params = Array.isArray(rangeStatement.params)
+    ? rangeStatement.params
+    : [];
+  const subtypeRef = rangeSubtypeRef(params);
+
+  for (const paramNode of params) {
+    const defElem = asRecord(asRecord(paramNode)?.DefElem);
+    const optionName =
+      typeof defElem?.defname === "string" ? defElem.defname.toLowerCase() : "";
+    if (optionName === "subtype_opclass") {
+      return null;
+    }
+  }
+
+  return defaultBtreeOperatorClassRefForRangeSubtype(subtypeRef);
 };
 
 const extractCreateRangeDependencies = (
@@ -1159,7 +1246,11 @@ const extractCreateRangeDependencies = (
         continue;
       }
 
-      const functionRef = objectFromNameParts("function", functionNameParts);
+      const functionRef = objectRefFromNamePartsWithArgs(
+        "function",
+        functionNameParts,
+        rangeFunctionArgs(optionName, rangeRef, subtypeRef),
+      );
       if (functionRef) {
         requires.push(functionRef);
       }
@@ -1214,6 +1305,15 @@ const builtInOperatorEstimatorFunctionNames = new Set([
   "scalargtsel",
 ]);
 
+const builtInOperatorImplementationFunctionSignatures = new Map<
+  string,
+  string[][]
+>([
+  ["int2eq", [["int2", "int2"]]],
+  ["int4eq", [["int4", "int4"]]],
+  ["int8eq", [["int8", "int8"]]],
+]);
+
 const isBuiltInOperatorEstimatorFunctionName = (
   nameParts: string[],
 ): boolean => {
@@ -1225,6 +1325,35 @@ const isBuiltInOperatorEstimatorFunctionName = (
   return (
     nameParts.length === 1 ||
     (nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog")
+  );
+};
+
+const isBuiltInOperatorImplementationFunctionName = (
+  nameParts: string[],
+  args: (ObjectRef | null)[],
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name) {
+    return false;
+  }
+  const builtInSignatures =
+    builtInOperatorImplementationFunctionSignatures.get(name);
+  if (!builtInSignatures) {
+    return false;
+  }
+  if (
+    nameParts.length !== 1 &&
+    !(nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog")
+  ) {
+    return false;
+  }
+
+  return builtInSignatures.some(
+    (signature) =>
+      args.length === signature.length &&
+      signature.every((typeName, index) =>
+        typeRefMatchesBuiltInNames(args[index] ?? null, [typeName]),
+      ),
   );
 };
 
@@ -1296,9 +1425,10 @@ const extractCreateOperatorDependencies = (
     }
   }
 
-  const functionSignatureParts = [leftArgRef, rightArgRef]
-    .filter((argRef): argRef is ObjectRef => argRef !== null)
-    .map(typeSignaturePart);
+  const functionArgRefs = [leftArgRef, rightArgRef].filter(
+    (argRef): argRef is ObjectRef => argRef !== null,
+  );
+  const functionSignatureParts = functionArgRefs.map(typeSignaturePart);
   const operatorSignatureParts =
     leftArgRef || rightArgRef
       ? [
@@ -1321,7 +1451,13 @@ const extractCreateOperatorDependencies = (
   }
 
   const functionRef = objectFromNameParts("function", functionNameParts);
-  if (functionRef) {
+  if (
+    functionRef &&
+    !isBuiltInOperatorImplementationFunctionName(
+      functionNameParts,
+      functionArgRefs,
+    )
+  ) {
     requires.push(
       createObjectRefFromAst(
         "function",

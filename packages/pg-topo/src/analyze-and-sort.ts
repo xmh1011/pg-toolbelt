@@ -3,7 +3,10 @@ import {
   phaseForStatementClass,
   statementClassAstNode,
 } from "./classify/classify-statement.ts";
-import { extractDependencies } from "./extract/extract-dependencies.ts";
+import {
+  extractDependencies,
+  implicitRangeSubtypeOperatorClassRef,
+} from "./extract/extract-dependencies.ts";
 import { buildGraph, type EdgeMetadata } from "./graph/build-graph.ts";
 import { compareStatementIndices, topoSort } from "./graph/topo-sort.ts";
 import { type ParsedStatement, parseSqlContent } from "./ingest/parse.ts";
@@ -55,6 +58,39 @@ const compareDiagnostics = (left: Diagnostic, right: Diagnostic): number => {
   }
 
   return left.message.localeCompare(right.message);
+};
+
+const addImplicitRangeOperatorClassDependencies = (
+  statementNodes: StatementNode[],
+  parsedStatements: ParsedStatement[],
+): void => {
+  const providedKeys = new Set(
+    statementNodes
+      .flatMap((statementNode) => statementNode.provides)
+      .map(objectRefKey),
+  );
+
+  for (let index = 0; index < statementNodes.length; index += 1) {
+    const statementNode = statementNodes[index];
+    const parsedStatement = parsedStatements[index];
+    if (
+      !statementNode ||
+      statementNode.statementClass !== "CREATE_TYPE" ||
+      !parsedStatement
+    ) {
+      continue;
+    }
+
+    const rangeOperatorClassRef = implicitRangeSubtypeOperatorClassRef(
+      parsedStatement.ast,
+    );
+    if (
+      rangeOperatorClassRef &&
+      providedKeys.has(objectRefKey(rangeOperatorClassRef))
+    ) {
+      statementNode.requires.push(rangeOperatorClassRef);
+    }
+  }
 };
 
 const buildGraphReport = (
@@ -168,6 +204,8 @@ export const analyzeAndSort = async (
       annotations: parsedStatement.annotations,
     });
   }
+
+  addImplicitRangeOperatorClassDependencies(statementNodes, parsedStatements);
 
   const graphState = buildGraph(statementNodes, options?.externalProviders);
   diagnostics.push(...graphState.diagnostics);

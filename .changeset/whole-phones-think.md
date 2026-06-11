@@ -2,4 +2,4 @@
 "@supabase/pg-topo": patch
 ---
 
-Track operator class item dependency edges in pg-topo.
+Track range, operator, operator class, and base type dependency edges in pg-topo.

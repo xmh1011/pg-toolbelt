@@ -123,6 +123,9 @@ export const classifyStatement = (ast: unknown): StatementClass => {
     if (defineStmt?.kind === "OBJECT_AGGREGATE") {
       return "CREATE_AGGREGATE";
     }
+    if (defineStmt?.kind === "OBJECT_TYPE") {
+      return "CREATE_TYPE";
+    }
     return "UNKNOWN";
   }
 

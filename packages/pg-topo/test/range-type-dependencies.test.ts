@@ -123,4 +123,55 @@ describe("range type dependencies", () => {
     expect(rangeIndex).toBeGreaterThan(schemaIndex);
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
+
+  test("orders canonical range functions through the shell type pattern", async () => {
+    const result = await analyzeAndSort([
+      "create table app.events(id int primary key, during app.int_range not null);",
+      "create type app.int_range as range (subtype = int4, canonical = app.int_range_canonical);",
+      "create function app.int_range_canonical(value app.int_range) returns app.int_range language internal immutable as 'int4range_canonical';",
+      "create type app.int_range;",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unknownCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
+    ).length;
+    const duplicateCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "DUPLICATE_PRODUCER",
+    ).length;
+    const cycleCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "CYCLE_DETECTED",
+    ).length;
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const schemaIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create schema app"),
+    );
+    const shellTypeIndex = orderedSql.findIndex(
+      (sql) => sql.trim() === "create type app.int_range;",
+    );
+    const canonicalIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function app.int_range_canonical"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.int_range as range"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.events"),
+    );
+
+    expect(unknownCount).toBe(0);
+    expect(duplicateCount).toBe(0);
+    expect(cycleCount).toBe(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(schemaIndex).toBeGreaterThanOrEqual(0);
+    expect(shellTypeIndex).toBeGreaterThan(schemaIndex);
+    expect(canonicalIndex).toBeGreaterThan(shellTypeIndex);
+    expect(rangeIndex).toBeGreaterThan(canonicalIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
 });

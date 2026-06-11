@@ -2,7 +2,11 @@ import {
   isKindCompatible,
   signaturesCompatible,
 } from "../model/object-compat.ts";
-import { isBuiltInObjectRef, objectRefKey } from "../model/object-ref.ts";
+import {
+  isBuiltInObjectRef,
+  isShellTypeRef,
+  objectRefKey,
+} from "../model/object-ref.ts";
 import type {
   Diagnostic,
   GraphEdgeReason,
@@ -152,6 +156,9 @@ const producerIndicesForRequirement = (
     }
 
     const hasMatchingProvide = node.provides.some((providedRef) => {
+      if (isShellTypeRef(providedRef)) {
+        return false;
+      }
       if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
         return false;
       }
@@ -173,6 +180,64 @@ const producerIndicesForRequirement = (
   }
   return indices;
 };
+
+const hasCompatibleProvidedObject = (
+  requiredRef: ObjectRef,
+  providedRefs: ObjectRef[],
+): boolean =>
+  providedRefs.some((providedRef) => {
+    if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
+      return false;
+    }
+    if (requiredRef.name !== providedRef.name) {
+      return false;
+    }
+    if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
+      return false;
+    }
+    return signaturesCompatible(requiredRef.signature, providedRef.signature);
+  });
+
+const findShellTypeProducerIndex = (
+  requiredRef: ObjectRef,
+  nodes: StatementNode[],
+): number | undefined => {
+  if (requiredRef.kind !== "type") {
+    return undefined;
+  }
+
+  for (
+    let producerIndex = 0;
+    producerIndex < nodes.length;
+    producerIndex += 1
+  ) {
+    const node = nodes[producerIndex];
+    if (!node) {
+      continue;
+    }
+    const hasShellType = node.provides.some(
+      (providedRef) =>
+        isShellTypeRef(providedRef) &&
+        providedRef.name === requiredRef.name &&
+        providedRef.schema === requiredRef.schema,
+    );
+    if (hasShellType) {
+      return producerIndex;
+    }
+  }
+
+  return undefined;
+};
+
+// Range canonical/subtype_diff support routines can legally depend on a shell
+// type while the final CREATE TYPE ... AS RANGE depends on those routines.
+const producerRequiresConsumer = (
+  producer: StatementNode,
+  consumer: StatementNode,
+): boolean =>
+  producer.requires.some((requiredRef) =>
+    hasCompatibleProvidedObject(requiredRef, consumer.provides),
+  );
 
 export const buildGraph = (
   nodes: StatementNode[],
@@ -257,6 +322,24 @@ export const buildGraph = (
 
       if (producerIndices.length === 1) {
         const producerIndex = producerIndices[0];
+        const producer =
+          typeof producerIndex === "number" ? nodes[producerIndex] : undefined;
+        const shellTypeProducerIndex = findShellTypeProducerIndex(
+          requiredRef,
+          nodes,
+        );
+        if (
+          typeof shellTypeProducerIndex === "number" &&
+          shellTypeProducerIndex !== consumerIndex &&
+          producer &&
+          producerRequiresConsumer(producer, consumer)
+        ) {
+          addEdge(graphState, shellTypeProducerIndex, consumerIndex, {
+            reason: "requires_compatible",
+            objectRef: requiredRef,
+          });
+          continue;
+        }
         if (
           typeof producerIndex === "number" &&
           producerIndex !== consumerIndex

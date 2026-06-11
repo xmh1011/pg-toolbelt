@@ -72,6 +72,20 @@ describe("classifyStatement", () => {
     ).toBe("CREATE_TYPE");
   });
 
+  test("returns CREATE_TYPE for shell type DefineStmt", () => {
+    expect(
+      classifyStatement({
+        DefineStmt: {
+          kind: "OBJECT_TYPE",
+          defnames: [
+            { String: { sval: "app" } },
+            { String: { sval: "int_range" } },
+          ],
+        },
+      }),
+    ).toBe("CREATE_TYPE");
+  });
+
   test("returns REVOKE when GrantStmt has is_grant false", () => {
     expect(
       classifyStatement({

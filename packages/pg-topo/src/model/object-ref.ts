@@ -186,6 +186,13 @@ export const createObjectRefFromAst = (
   signature?: string,
 ): ObjectRef => createObjectRef(kind, name, schema, signature, "ast");
 
+// CREATE TYPE name; creates a shell type that support routines can reference,
+// but ordinary consumers still need the later concrete type definition.
+export const SHELL_TYPE_SIGNATURE = "(shell)";
+
+export const isShellTypeRef = (ref: ObjectRef): boolean =>
+  ref.kind === "type" && ref.signature === SHELL_TYPE_SIGNATURE;
+
 export const objectRefKey = (ref: ObjectRef): string => {
   const schema = ref.schema ?? "";
   const signature = ref.signature ?? "";

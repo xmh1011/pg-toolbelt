@@ -4,6 +4,7 @@ import {
   createObjectRefFromAst,
   DEFAULT_SCHEMA,
   dedupeObjectRefs,
+  SHELL_TYPE_SIGNATURE,
   splitQualifiedName,
 } from "../model/object-ref.ts";
 import type { AnnotationHints, ObjectRef } from "../model/types.ts";
@@ -1110,6 +1111,29 @@ const extractDependencyRefs = (
         asRecord(astNode.CreateForeignServerStmt) ?? {},
       );
     case "CREATE_TYPE": {
+      const defineStmt = asRecord(astNode.DefineStmt);
+      if (defineStmt?.kind === "OBJECT_TYPE") {
+        const shellTypeRef = objectFromNameParts(
+          "type",
+          extractNameParts(defineStmt.defnames),
+        );
+        return {
+          provides: shellTypeRef
+            ? [
+                createObjectRefFromAst(
+                  "type",
+                  shellTypeRef.name,
+                  shellTypeRef.schema,
+                  SHELL_TYPE_SIGNATURE,
+                ),
+              ]
+            : [],
+          requires: shellTypeRef?.schema
+            ? [createObjectRefFromAst("schema", shellTypeRef.schema)]
+            : [],
+        };
+      }
+
       const compositeType = asRecord(astNode.CompositeTypeStmt);
       const compositeRef = relationFromRangeVarNode(
         compositeType?.typevar,

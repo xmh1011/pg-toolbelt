@@ -729,10 +729,18 @@ const rangeFunctionOptionNames = new Set(["canonical", "subtype_diff"]);
 
 const builtInRangeCollationNames = new Set(["c", "posix"]);
 
-const isBuiltInRangeCollation = (ref: ObjectRef): boolean =>
-  ref.kind === "collation" &&
-  (!ref.schema || ref.schema === DEFAULT_SCHEMA) &&
-  builtInRangeCollationNames.has(ref.name.toLowerCase());
+const isBuiltInRangeCollationName = (nameParts: string[]): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name || !builtInRangeCollationNames.has(name)) {
+    return false;
+  }
+
+  if (nameParts.length === 1) {
+    return true;
+  }
+
+  return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
+};
 
 const defaultMultirangeTypeName = (rangeTypeName: string): string =>
   rangeTypeName.endsWith("range")
@@ -749,6 +757,8 @@ const baseTypeFunctionOptionNames = new Set([
   "analyze",
   "subscript",
 ]);
+
+const baseTypeTypeOptionNames = new Set(["like"]);
 
 const extractCreateRangeDependencies = (
   statementNode: Record<string, unknown>,
@@ -791,11 +801,9 @@ const extractCreateRangeDependencies = (
     }
 
     if (optionName === "collation") {
-      const collationRef = objectFromNameParts(
-        "collation",
-        extractNameParts(typeName?.names),
-      );
-      if (collationRef && !isBuiltInRangeCollation(collationRef)) {
+      const collationNameParts = extractNameParts(typeName?.names);
+      const collationRef = objectFromNameParts("collation", collationNameParts);
+      if (collationRef && !isBuiltInRangeCollationName(collationNameParts)) {
         requires.push(collationRef);
       }
       continue;
@@ -875,7 +883,16 @@ const extractCreateBaseTypeDependencies = (
       continue;
     }
 
-    if (!baseTypeFunctionOptionNames.has(defElem.defname.toLowerCase())) {
+    const optionName = defElem.defname.toLowerCase();
+    if (baseTypeTypeOptionNames.has(optionName)) {
+      const typeRef = typeFromTypeNameNode(asRecord(defElem.arg)?.TypeName);
+      if (typeRef) {
+        requires.push(typeRef);
+      }
+      continue;
+    }
+
+    if (!baseTypeFunctionOptionNames.has(optionName)) {
       continue;
     }
 

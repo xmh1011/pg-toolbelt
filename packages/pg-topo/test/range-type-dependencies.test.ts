@@ -82,6 +82,95 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
 
+  test("preserves local float8mi subtype_diff functions", async () => {
+    const result = await analyzeAndSort([
+      "set search_path = public, pg_catalog;",
+      "create table measurements(id int primary key, value_span floatrange not null);",
+      "create type floatrange as range (subtype = float8, subtype_diff = float8mi);",
+      "create function float8mi(a float8, b float8) returns float8 language sql immutable strict as $$ select (a - b) * 2 $$;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type floatrange"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "float8mi",
+      signature: "(public.float8,public.float8)",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const subtypeDiffIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function float8mi"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type floatrange"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table measurements"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(subtypeDiffIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(subtypeDiffIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
+
+  test("does not require producer statements for built-in subtype_diff helpers", async () => {
+    const result = await analyzeAndSort([
+      "create table app.measurements(id int primary key, value_span app.int4_range not null);",
+      "create type app.int4_range as range (subtype = int4, subtype_diff = int4range_subdiff);",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.int4_range"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(rangeStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "int4range_subdiff",
+      signature: "(public.int4,public.int4)",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const schemaIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create schema app"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.int4_range"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.measurements"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(schemaIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(schemaIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
+
   test("orders range type after custom collation", async () => {
     const result = await analyzeAndSort([
       "create table app.labels(id int primary key, value_span app.label_range not null);",
@@ -2426,6 +2515,56 @@ describe("range type dependencies", () => {
     });
     expect(labelsTableIndex).toBeGreaterThan(explicitRangeIndex);
     expect(pricesTableIndex).toBeGreaterThan(implicitRangeIndex);
+  }, 120000);
+
+  test("provides array refs for composite and table row types", async () => {
+    const result = await analyzeAndSort([
+      "create table app.events(id int primary key, rows app.row_type[] not null, sources app.source_table[] not null);",
+      "create type app.row_type as (value int4);",
+      "create table app.source_table(id int primary key);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const compositeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.row_type"),
+    );
+    const sourceTableStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create table app.source_table"),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const compositeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.row_type"),
+    );
+    const sourceTableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.source_table"),
+    );
+    const eventsTableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.events"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(compositeStatement?.provides).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "row_type[]",
+    });
+    expect(sourceTableStatement?.provides).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "source_table[]",
+    });
+    expect(compositeIndex).toBeGreaterThanOrEqual(0);
+    expect(sourceTableIndex).toBeGreaterThan(compositeIndex);
+    expect(eventsTableIndex).toBeGreaterThan(sourceTableIndex);
   }, 120000);
 
   test("orders canonical range functions through the shell type pattern", async () => {

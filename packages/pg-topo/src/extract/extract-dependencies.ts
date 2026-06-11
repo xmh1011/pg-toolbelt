@@ -43,12 +43,14 @@ type ExtractionContext = {
   enumTypeKeys: ReadonlySet<string>;
   rangeTypeKeys: ReadonlySet<string>;
   multirangeTypeKeys: ReadonlySet<string>;
+  domainBaseTypes: ReadonlyMap<string, ObjectRef>;
 };
 
 const EMPTY_EXTRACTION_CONTEXT: ExtractionContext = {
   enumTypeKeys: new Set(),
   rangeTypeKeys: new Set(),
   multirangeTypeKeys: new Set(),
+  domainBaseTypes: new Map(),
 };
 
 const typeProviderRefs = (typeRef: ObjectRef): ObjectRef[] => [
@@ -1124,7 +1126,52 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["date_cmp", [["date", "date"]]],
   ["date_sortsupport", [["internal"]]],
   ["enum_cmp", [["anyenum", "anyenum"]]],
+  ["hash_aclitem", [["aclitem"]]],
+  ["hash_aclitem_extended", [["aclitem", "int8"]]],
+  ["hash_array", [["anyarray"]]],
+  ["hash_array_extended", [["anyarray", "int8"]]],
+  ["hash_multirange", [["anymultirange"]]],
+  ["hash_multirange_extended", [["anymultirange", "int8"]]],
+  ["hash_numeric", [["numeric"]]],
+  ["hash_numeric_extended", [["numeric", "int8"]]],
+  ["hash_range", [["anyrange"]]],
+  ["hash_range_extended", [["anyrange", "int8"]]],
+  ["hash_record", [["record"]]],
+  ["hash_record_extended", [["record", "int8"]]],
+  ["hashbpchar", [["bpchar"]]],
+  ["hashbpcharextended", [["bpchar", "int8"]]],
+  ["hashchar", [["char"]]],
+  ["hashcharextended", [["char", "int8"]]],
+  ["hashenum", [["anyenum"]]],
+  ["hashenumextended", [["anyenum", "int8"]]],
+  ["hashfloat4", [["float4"]]],
+  ["hashfloat4extended", [["float4", "int8"]]],
+  ["hashfloat8", [["float8"]]],
+  ["hashfloat8extended", [["float8", "int8"]]],
+  ["hashinet", [["inet"]]],
+  ["hashinetextended", [["inet", "int8"]]],
+  ["hashint2", [["int2"]]],
+  ["hashint2extended", [["int2", "int8"]]],
   ["hashint4", [["int4"]]],
+  ["hashint4extended", [["int4", "int8"]]],
+  ["hashint8", [["int8"]]],
+  ["hashint8extended", [["int8", "int8"]]],
+  ["hashmacaddr", [["macaddr"]]],
+  ["hashmacaddrextended", [["macaddr", "int8"]]],
+  ["hashmacaddr8", [["macaddr8"]]],
+  ["hashmacaddr8extended", [["macaddr8", "int8"]]],
+  ["hashname", [["name"]]],
+  ["hashnameextended", [["name", "int8"]]],
+  ["hashoid", [["oid"]]],
+  ["hashoidextended", [["oid", "int8"]]],
+  ["hashoidvector", [["oidvector"]]],
+  ["hashoidvectorextended", [["oidvector", "int8"]]],
+  ["hashtext", [["text"]]],
+  ["hashtextextended", [["text", "int8"]]],
+  ["hashtid", [["tid"]]],
+  ["hashtidextended", [["tid", "int8"]]],
+  ["hashvarlena", [["internal"]]],
+  ["hashvarlenaextended", [["internal", "int8"]]],
   [
     "in_range",
     [
@@ -1137,7 +1184,11 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
     ],
   ],
   ["interval_cmp", [["interval", "interval"]]],
+  ["interval_hash", [["interval"]]],
+  ["interval_hash_extended", [["interval", "int8"]]],
   ["jsonb_cmp", [["jsonb", "jsonb"]]],
+  ["jsonb_hash", [["jsonb"]]],
+  ["jsonb_hash_extended", [["jsonb", "int8"]]],
   ["macaddr8_cmp", [["macaddr8", "macaddr8"]]],
   ["macaddr_cmp", [["macaddr", "macaddr"]]],
   ["macaddr_sortsupport", [["internal"]]],
@@ -1147,15 +1198,25 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["numeric_cmp", [["numeric", "numeric"]]],
   ["numeric_sortsupport", [["internal"]]],
   ["pg_lsn_cmp", [["pg_lsn", "pg_lsn"]]],
+  ["pg_lsn_hash", [["pg_lsn"]]],
+  ["pg_lsn_hash_extended", [["pg_lsn", "int8"]]],
   ["range_cmp", [["anyrange", "anyrange"]]],
   ["time_cmp", [["time", "time"]]],
+  ["time_hash", [["time"]]],
+  ["time_hash_extended", [["time", "int8"]]],
   ["timestamp_cmp", [["timestamp", "timestamp"]]],
+  ["timestamp_hash", [["timestamp"]]],
+  ["timestamp_hash_extended", [["timestamp", "int8"]]],
   ["timestamp_sortsupport", [["internal"]]],
   ["timestamptz_cmp", [["timestamptz", "timestamptz"]]],
   ["timetz_cmp", [["timetz", "timetz"]]],
+  ["timetz_hash", [["timetz"]]],
+  ["timetz_hash_extended", [["timetz", "int8"]]],
   ["tsquery_cmp", [["tsquery", "tsquery"]]],
   ["tsvector_cmp", [["tsvector", "tsvector"]]],
   ["uuid_cmp", [["uuid", "uuid"]]],
+  ["uuid_hash", [["uuid"]]],
+  ["uuid_hash_extended", [["uuid", "int8"]]],
   ["uuid_sortsupport", [["internal"]]],
   ["varbitcmp", [["varbit", "varbit"]]],
   ["xid8cmp", [["xid8", "xid8"]]],
@@ -1265,6 +1326,19 @@ const baseTypeTypeOptionNames = new Set(["like", "element"]);
 
 const typeSignaturePart = (typeRef: ObjectRef): string =>
   typeRef.schema ? `${typeRef.schema}.${typeRef.name}` : typeRef.name;
+
+const operatorClassTypeSignaturePart = (typeRef: ObjectRef): string =>
+  isBuiltInObjectRef(typeRef) ? typeRef.name : typeSignaturePart(typeRef);
+
+const operatorClassSignature = (
+  accessMethod: string,
+  dataTypeRef: ObjectRef | null,
+): string | undefined =>
+  accessMethod
+    ? dataTypeRef
+      ? `(${accessMethod},${operatorClassTypeSignaturePart(dataTypeRef)})`
+      : accessMethod
+    : undefined;
 
 const objectWithArgsTypeRefs = (
   objectWithArgs: unknown,
@@ -1399,9 +1473,20 @@ export const createExtractionContext = (
   const enumTypeKeys = new Set<string>();
   const rangeTypeKeys = new Set<string>();
   const multirangeTypeKeys = new Set<string>();
+  const domainBaseTypes = new Map<string, ObjectRef>();
 
   for (const astNode of astNodes) {
     const astRecord = asRecord(astNode);
+    const domainStmt = asRecord(astRecord?.CreateDomainStmt);
+    const domainRef = objectFromNameParts(
+      "type",
+      extractNameParts(domainStmt?.domainname),
+    );
+    const domainBaseTypeRef = typeFromTypeNameNode(domainStmt?.typeName);
+    if (domainRef && domainBaseTypeRef) {
+      domainBaseTypes.set(objectRefKey(domainRef), domainBaseTypeRef);
+    }
+
     const enumStmt = asRecord(astRecord?.CreateEnumStmt);
     addTypeKey(
       enumTypeKeys,
@@ -1453,7 +1538,33 @@ export const createExtractionContext = (
     }
   }
 
-  return { enumTypeKeys, rangeTypeKeys, multirangeTypeKeys };
+  return { enumTypeKeys, rangeTypeKeys, multirangeTypeKeys, domainBaseTypes };
+};
+
+const domainBaseTypeRef = (
+  subtypeRef: ObjectRef,
+  context: ExtractionContext,
+): ObjectRef | null => {
+  let currentRef: ObjectRef | undefined = subtypeRef;
+  const seenKeys = new Set<string>();
+
+  while (currentRef) {
+    const key = objectRefKey(
+      createObjectRefFromAst("type", currentRef.name, currentRef.schema),
+    );
+    if (seenKeys.has(key)) {
+      return null;
+    }
+    seenKeys.add(key);
+
+    const baseRef = context.domainBaseTypes.get(key);
+    if (!baseRef) {
+      return currentRef === subtypeRef ? null : currentRef;
+    }
+    currentRef = baseRef;
+  }
+
+  return null;
 };
 
 export const omittedRangeSubtypeOperatorClassSubtypeRef = (
@@ -1523,7 +1634,7 @@ export const defaultBtreeOperatorClassProviderRefForSubtype = (
         "operator_class",
         operatorClassRef.name,
         operatorClassRef.schema,
-        "btree",
+        operatorClassSignature("btree", dataTypeRef),
       )
     : null;
 };
@@ -1531,11 +1642,38 @@ export const defaultBtreeOperatorClassProviderRefForSubtype = (
 export const hasPgCatalogDefaultBtreeOperatorClassForSubtype = (
   subtypeRef: ObjectRef,
   context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
-): boolean =>
-  typeRefMatchesPolymorphicBuiltInName(subtypeRef, "anyarray", context) ||
-  typeRefMatchesPolymorphicBuiltInName(subtypeRef, "anyenum", context) ||
-  typeRefMatchesPolymorphicBuiltInName(subtypeRef, "anyrange", context) ||
-  typeRefMatchesPolymorphicBuiltInName(subtypeRef, "anymultirange", context);
+): boolean => {
+  const effectiveSubtypeRef =
+    domainBaseTypeRef(subtypeRef, context) ?? subtypeRef;
+
+  return (
+    typeRefMatchesPolymorphicBuiltInName(
+      effectiveSubtypeRef,
+      "anyarray",
+      context,
+    ) ||
+    typeRefMatchesPolymorphicBuiltInName(
+      effectiveSubtypeRef,
+      "anyenum",
+      context,
+    ) ||
+    typeRefMatchesPolymorphicBuiltInName(
+      effectiveSubtypeRef,
+      "anyrange",
+      context,
+    ) ||
+    typeRefMatchesPolymorphicBuiltInName(
+      effectiveSubtypeRef,
+      "anymultirange",
+      context,
+    ) ||
+    isBuiltInRangeOperatorClassName(
+      [`${effectiveSubtypeRef.name}_ops`],
+      effectiveSubtypeRef,
+      context,
+    )
+  );
+};
 
 const extractCreateRangeDependencies = (
   statementNode: Record<string, unknown>,
@@ -1606,7 +1744,7 @@ const extractCreateRangeDependencies = (
           "operator_class",
           operatorClassRef.name,
           operatorClassRef.schema,
-          "btree",
+          operatorClassSignature("btree", subtypeRef),
         );
         if (
           isBuiltInRangeOperatorClassName(
@@ -2026,6 +2164,7 @@ const extractCreateOperatorClassDependencies = (
     "operator_family",
     extractNameParts(statementNode.opfamilyname),
   );
+  const dataTypeRef = typeFromTypeNameNode(statementNode.datatype);
 
   const operatorClassRef = objectFromNameParts(
     "operator_class",
@@ -2037,7 +2176,7 @@ const extractCreateOperatorClassDependencies = (
         "operator_class",
         operatorClassRef.name,
         operatorClassRef.schema,
-        accessMethod || undefined,
+        operatorClassSignature(accessMethod, dataTypeRef),
       ),
     );
     if (!operatorFamilyRef) {
@@ -2070,7 +2209,6 @@ const extractCreateOperatorClassDependencies = (
     );
   }
 
-  const dataTypeRef = typeFromTypeNameNode(statementNode.datatype);
   if (dataTypeRef) {
     requires.push(dataTypeRef);
   }

@@ -2,6 +2,7 @@ import { splitTopLevel } from "../utils/split-top-level.ts";
 import type { ObjectKind, ObjectRef } from "./types.ts";
 
 const BUILTIN_TYPES = new Set([
+  "aclitem",
   "any",
   "anyarray",
   "anyelement",

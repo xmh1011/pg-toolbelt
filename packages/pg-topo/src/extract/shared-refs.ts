@@ -53,6 +53,8 @@ export const objectKindFromObjType = (
       return "operator";
     case "OBJECT_OPCLASS":
       return "operator_class";
+    case "OBJECT_OPFAMILY":
+      return "operator_family";
     case "OBJECT_LANGUAGE":
       return "language";
     case "OBJECT_MATVIEW":

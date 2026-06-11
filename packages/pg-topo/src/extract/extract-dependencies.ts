@@ -733,17 +733,30 @@ const rangeFunctionOptionNames = new Set(["canonical", "subtype_diff"]);
 // so custom routines still order before the range type that uses them.
 const builtInRangeSupportFunctionNames = new Set(["float8mi"]);
 
-const isBuiltInRangeSupportFunctionName = (nameParts: string[]): boolean => {
+const isFloat8TypeRef = (typeRef: ObjectRef | null): boolean => {
+  if (!typeRef || typeRef.kind !== "type") {
+    return false;
+  }
+  return typeRef.name.toLowerCase() === "float8" && isBuiltInObjectRef(typeRef);
+};
+
+const isBuiltInRangeSupportFunctionName = (
+  nameParts: string[],
+  subtypeRef: ObjectRef | null,
+): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
   if (!name || !builtInRangeSupportFunctionNames.has(name)) {
     return false;
   }
 
-  if (nameParts.length === 1) {
+  if (nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog") {
     return true;
   }
 
-  return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
+  // Unqualified float8mi is pg_catalog's helper only for float8 subtypes. For
+  // other subtypes it can resolve to a user-defined overload and must stay as a
+  // dependency.
+  return nameParts.length === 1 && isFloat8TypeRef(subtypeRef);
 };
 
 // PostgreSQL standard/predefined collations live in pg_catalog. User collations
@@ -808,17 +821,76 @@ const builtInRangeOperatorClassNames = new Set([
   "varchar_ops",
 ]);
 
-const isBuiltInRangeOperatorClassName = (nameParts: string[]): boolean => {
+const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
+  ["bit_ops", ["bit"]],
+  ["bool_ops", ["bool"]],
+  ["bpchar_ops", ["bpchar"]],
+  ["bytea_ops", ["bytea"]],
+  ["char_ops", ["char"]],
+  ["cidr_ops", ["cidr"]],
+  ["date_ops", ["date"]],
+  ["float4_ops", ["float4"]],
+  ["float8_ops", ["float8"]],
+  ["inet_ops", ["inet"]],
+  ["int2_ops", ["int2"]],
+  ["int4_ops", ["int4"]],
+  ["int8_ops", ["int8"]],
+  ["interval_ops", ["interval"]],
+  ["jsonb_ops", ["jsonb"]],
+  ["macaddr8_ops", ["macaddr8"]],
+  ["macaddr_ops", ["macaddr"]],
+  ["money_ops", ["money"]],
+  ["name_ops", ["name"]],
+  ["numeric_ops", ["numeric"]],
+  ["oid_ops", ["oid"]],
+  ["text_ops", ["text"]],
+  ["time_ops", ["time"]],
+  ["timestamp_ops", ["timestamp"]],
+  ["timestamptz_ops", ["timestamptz"]],
+  ["timetz_ops", ["timetz"]],
+  ["uuid_ops", ["uuid"]],
+  ["varbit_ops", ["varbit"]],
+  ["varchar_ops", ["varchar"]],
+]);
+
+const typeRefMatchesBuiltInNames = (
+  typeRef: ObjectRef | null,
+  names: string[],
+): boolean => {
+  if (!typeRef || typeRef.kind !== "type") {
+    return false;
+  }
+  return (
+    isBuiltInObjectRef(typeRef) && names.includes(typeRef.name.toLowerCase())
+  );
+};
+
+const isBuiltInRangeOperatorClassName = (
+  nameParts: string[],
+  subtypeRef: ObjectRef | null,
+): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
   if (!name || !builtInRangeOperatorClassNames.has(name)) {
     return false;
   }
 
-  if (nameParts.length === 1) {
+  if (nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog") {
     return true;
   }
 
-  return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
+  if (nameParts.length !== 1) {
+    return false;
+  }
+
+  const expectedSubtypes = builtInRangeOperatorClassSubtypes.get(name);
+  if (!expectedSubtypes) {
+    return true;
+  }
+
+  // Some user-defined opclasses intentionally reuse built-in names. Only skip
+  // concrete built-in names when the range subtype matches the pg_catalog
+  // opclass they normally belong to.
+  return typeRefMatchesBuiltInNames(subtypeRef, expectedSubtypes);
 };
 
 // Opclass items commonly reference pg_catalog support objects without schema
@@ -857,14 +929,24 @@ const builtInOperatorClassSupportOperatorNames = new Set([
 const isBuiltInOperatorClassSupportOperatorName = (
   nameParts: string[],
   args: (ObjectRef | null)[],
+  operatorClassDataTypeRef: ObjectRef | null,
 ): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
-  return (
-    nameParts.length === 1 &&
-    Boolean(name && builtInOperatorClassSupportOperatorNames.has(name)) &&
-    args.length > 0 &&
-    args.every((argRef) => argRef !== null && isBuiltInObjectRef(argRef))
-  );
+  if (
+    nameParts.length !== 1 ||
+    !name ||
+    !builtInOperatorClassSupportOperatorNames.has(name)
+  ) {
+    return false;
+  }
+
+  if (args.length === 0) {
+    return Boolean(
+      operatorClassDataTypeRef && isBuiltInObjectRef(operatorClassDataTypeRef),
+    );
+  }
+
+  return args.every((argRef) => argRef !== null && isBuiltInObjectRef(argRef));
 };
 
 const defaultMultirangeTypeName = (rangeTypeName: string): string =>
@@ -935,6 +1017,23 @@ const objectWithArgsRef = (
   );
 };
 
+const rangeSubtypeRef = (params: unknown[]): ObjectRef | null => {
+  for (const paramNode of params) {
+    const defElem = asRecord(asRecord(paramNode)?.DefElem);
+    if (!defElem) {
+      continue;
+    }
+    const optionName =
+      typeof defElem.defname === "string" ? defElem.defname.toLowerCase() : "";
+    if (optionName !== "subtype") {
+      continue;
+    }
+    return typeFromTypeNameNode(asRecord(asRecord(defElem.arg)?.TypeName));
+  }
+
+  return null;
+};
+
 const extractCreateRangeDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -957,6 +1056,7 @@ const extractCreateRangeDependencies = (
   const params = Array.isArray(statementNode.params)
     ? statementNode.params
     : [];
+  const subtypeRef = rangeSubtypeRef(params);
   let hasExplicitMultirangeTypeName = false;
 
   for (const paramNode of params) {
@@ -992,7 +1092,7 @@ const extractCreateRangeDependencies = (
       );
       if (
         operatorClassRef &&
-        !isBuiltInRangeOperatorClassName(operatorClassNameParts)
+        !isBuiltInRangeOperatorClassName(operatorClassNameParts, subtypeRef)
       ) {
         // PostgreSQL range subtypes resolve SUBTYPE_OPCLASS against the btree
         // access method, even when another method has an opclass with the same
@@ -1032,7 +1132,7 @@ const extractCreateRangeDependencies = (
 
     if (rangeFunctionOptionNames.has(optionName)) {
       const functionNameParts = extractNameParts(typeName?.names);
-      if (isBuiltInRangeSupportFunctionName(functionNameParts)) {
+      if (isBuiltInRangeSupportFunctionName(functionNameParts, subtypeRef)) {
         continue;
       }
 
@@ -1064,6 +1164,46 @@ const operatorImplementationFunctionOptionNames = new Set([
   "procedure",
 ]);
 const operatorEstimatorFunctionOptionNames = new Set(["restrict", "join"]);
+const builtInOperatorEstimatorFunctionNames = new Set([
+  "areajoinsel",
+  "areasel",
+  "contjoinsel",
+  "contsel",
+  "eqjoinsel",
+  "eqsel",
+  "iclikejoinsel",
+  "iclikesel",
+  "icnlikejoinsel",
+  "icnlikesel",
+  "likejoinsel",
+  "likesel",
+  "matchingjoinsel",
+  "matchingsel",
+  "neqjoinsel",
+  "neqsel",
+  "nlikejoinsel",
+  "nlikesel",
+  "positionjoinsel",
+  "positionsel",
+  "scalarltjoinsel",
+  "scalarltsel",
+  "scalargtjoinsel",
+  "scalargtsel",
+]);
+
+const isBuiltInOperatorEstimatorFunctionName = (
+  nameParts: string[],
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name || !builtInOperatorEstimatorFunctionNames.has(name)) {
+    return false;
+  }
+
+  return (
+    nameParts.length === 1 ||
+    (nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog")
+  );
+};
 
 const extractCreateOperatorDependencies = (
   statementNode: Record<string, unknown>,
@@ -1100,9 +1240,16 @@ const extractCreateOperatorDependencies = (
     }
 
     if (operatorEstimatorFunctionOptionNames.has(optionName)) {
+      const estimatorFunctionNameParts = extractNameParts(
+        asRecord(typeName)?.names,
+      );
+      if (isBuiltInOperatorEstimatorFunctionName(estimatorFunctionNameParts)) {
+        continue;
+      }
+
       const estimatorFunctionRef = objectFromNameParts(
         "function",
-        extractNameParts(asRecord(typeName)?.names),
+        estimatorFunctionNameParts,
       );
       if (estimatorFunctionRef) {
         requires.push(estimatorFunctionRef);
@@ -1159,19 +1306,48 @@ const extractCreateOperatorDependencies = (
 const OPCLASS_ITEM_OPERATOR = 1;
 const OPCLASS_ITEM_FUNCTION = 2;
 
+const extractCreateOperatorFamilyDependencies = (
+  statementNode: Record<string, unknown>,
+): ExtractDependenciesResult => {
+  const provides: ObjectRef[] = [];
+  const requires: ObjectRef[] = [];
+
+  const operatorFamilyRef = objectFromNameParts(
+    "operator_family",
+    extractNameParts(statementNode.opfamilyname),
+  );
+  if (operatorFamilyRef) {
+    const accessMethod =
+      typeof statementNode.amname === "string" ? statementNode.amname : "";
+    provides.push(
+      createObjectRefFromAst(
+        "operator_family",
+        operatorFamilyRef.name,
+        operatorFamilyRef.schema,
+        accessMethod || undefined,
+      ),
+    );
+    if (operatorFamilyRef.schema) {
+      requires.push(createObjectRefFromAst("schema", operatorFamilyRef.schema));
+    }
+  }
+
+  return { provides, requires };
+};
+
 const extractCreateOperatorClassDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
   const provides: ObjectRef[] = [];
   const requires: ObjectRef[] = [];
+  const accessMethod =
+    typeof statementNode.amname === "string" ? statementNode.amname : "";
 
   const operatorClassRef = objectFromNameParts(
     "operator_class",
     extractNameParts(statementNode.opclassname),
   );
   if (operatorClassRef) {
-    const accessMethod =
-      typeof statementNode.amname === "string" ? statementNode.amname : "";
     provides.push(
       createObjectRefFromAst(
         "operator_class",
@@ -1183,6 +1359,23 @@ const extractCreateOperatorClassDependencies = (
     if (operatorClassRef.schema) {
       requires.push(createObjectRefFromAst("schema", operatorClassRef.schema));
     }
+  }
+
+  const operatorFamilyRef = objectFromNameParts(
+    "operator_family",
+    extractNameParts(statementNode.opfamilyname),
+  );
+  if (operatorFamilyRef) {
+    // CREATE OPERATOR CLASS ... FAMILY requires the named family to exist for
+    // the same access method before the class can be created.
+    requires.push(
+      createObjectRefFromAst(
+        "operator_family",
+        operatorFamilyRef.name,
+        operatorFamilyRef.schema,
+        accessMethod || undefined,
+      ),
+    );
   }
 
   const dataTypeRef = typeFromTypeNameNode(statementNode.datatype);
@@ -1205,6 +1398,7 @@ const extractCreateOperatorClassDependencies = (
         isBuiltInOperatorClassSupportOperatorName(
           nameParts,
           objectWithArgsTypeRefs(itemName),
+          dataTypeRef,
         )
       ) {
         continue;
@@ -1797,6 +1991,10 @@ const extractDependencyRefs = (
     case "CREATE_OPERATOR_CLASS":
       return extractCreateOperatorClassDependencies(
         asRecord(astNode.CreateOpClassStmt) ?? {},
+      );
+    case "CREATE_OPERATOR_FAMILY":
+      return extractCreateOperatorFamilyDependencies(
+        asRecord(astNode.CreateOpFamilyStmt) ?? {},
       );
     case "CREATE_FUNCTION":
       return extractCreateFunctionDependencies(

@@ -15,6 +15,7 @@ export const OBJECT_KINDS = [
   "index",
   "operator",
   "operator_class",
+  "operator_family",
   "function",
   "procedure",
   "aggregate",

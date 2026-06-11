@@ -31,6 +31,7 @@ const BUILTIN_TYPES = new Set([
   "line",
   "lseg",
   "macaddr",
+  "macaddr8",
   "money",
   "name",
   "numeric",

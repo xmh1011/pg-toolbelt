@@ -896,13 +896,16 @@ const isBuiltInRangeOperatorClassName = (
 // Opclass items commonly reference pg_catalog support objects without schema
 // qualification. Keep those out of dependency resolution while still requiring
 // user-defined unqualified support items such as <# or app.cmp(...).
-const builtInOperatorClassSupportFunctionNames = new Set([
-  "btint2cmp",
-  "btint4cmp",
-  "btint8cmp",
-  "btfloat4cmp",
-  "btfloat8cmp",
-  "bttextcmp",
+const builtInOperatorClassSupportFunctionSignatures = new Map<
+  string,
+  string[][]
+>([
+  ["btfloat4cmp", [["float4", "float4"]]],
+  ["btfloat8cmp", [["float8", "float8"]]],
+  ["btint2cmp", [["int2", "int2"]]],
+  ["btint4cmp", [["int4", "int4"]]],
+  ["btint8cmp", [["int8", "int8"]]],
+  ["bttextcmp", [["text", "text"]]],
 ]);
 
 const isBuiltInOperatorClassSupportFunctionName = (
@@ -910,11 +913,27 @@ const isBuiltInOperatorClassSupportFunctionName = (
   args: (ObjectRef | null)[],
 ): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
-  return (
-    nameParts.length === 1 &&
-    Boolean(name && builtInOperatorClassSupportFunctionNames.has(name)) &&
-    args.length > 0 &&
-    args.every((argRef) => argRef !== null && isBuiltInObjectRef(argRef))
+  if (!name) {
+    return false;
+  }
+  const builtInSignatures =
+    builtInOperatorClassSupportFunctionSignatures.get(name);
+  if (!builtInSignatures) {
+    return false;
+  }
+  if (
+    nameParts.length !== 1 &&
+    !(nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog")
+  ) {
+    return false;
+  }
+
+  return builtInSignatures.some(
+    (signature) =>
+      args.length === signature.length &&
+      signature.every((typeName, index) =>
+        typeRefMatchesBuiltInNames(args[index] ?? null, [typeName]),
+      ),
   );
 };
 
@@ -1114,6 +1133,7 @@ const extractCreateRangeDependencies = (
       const multirangeRef = objectFromNameParts(
         "type",
         extractNameParts(typeName?.names),
+        rangeRef?.schema ?? DEFAULT_SCHEMA,
       );
       if (multirangeRef) {
         provides.push(
@@ -1273,9 +1293,16 @@ const extractCreateOperatorDependencies = (
     }
   }
 
-  const signatureParts = [leftArgRef, rightArgRef]
+  const functionSignatureParts = [leftArgRef, rightArgRef]
     .filter((argRef): argRef is ObjectRef => argRef !== null)
     .map(typeSignaturePart);
+  const operatorSignatureParts =
+    leftArgRef || rightArgRef
+      ? [
+          leftArgRef ? typeSignaturePart(leftArgRef) : "none",
+          rightArgRef ? typeSignaturePart(rightArgRef) : "none",
+        ]
+      : [];
 
   if (operatorRef) {
     provides.push(
@@ -1283,7 +1310,9 @@ const extractCreateOperatorDependencies = (
         "operator",
         operatorRef.name,
         operatorRef.schema,
-        signatureParts.length > 0 ? `(${signatureParts.join(",")})` : undefined,
+        operatorSignatureParts.length > 0
+          ? `(${operatorSignatureParts.join(",")})`
+          : undefined,
       ),
     );
   }
@@ -1295,7 +1324,9 @@ const extractCreateOperatorDependencies = (
         "function",
         functionRef.name,
         functionRef.schema,
-        signatureParts.length > 0 ? `(${signatureParts.join(",")})` : undefined,
+        functionSignatureParts.length > 0
+          ? `(${functionSignatureParts.join(",")})`
+          : undefined,
       ),
     );
   }
@@ -1305,6 +1336,7 @@ const extractCreateOperatorDependencies = (
 
 const OPCLASS_ITEM_OPERATOR = 1;
 const OPCLASS_ITEM_FUNCTION = 2;
+const OPCLASS_ITEM_STORAGE = 3;
 
 const extractCreateOperatorFamilyDependencies = (
   statementNode: Record<string, unknown>,
@@ -1342,6 +1374,10 @@ const extractCreateOperatorClassDependencies = (
   const requires: ObjectRef[] = [];
   const accessMethod =
     typeof statementNode.amname === "string" ? statementNode.amname : "";
+  const operatorFamilyRef = objectFromNameParts(
+    "operator_family",
+    extractNameParts(statementNode.opfamilyname),
+  );
 
   const operatorClassRef = objectFromNameParts(
     "operator_class",
@@ -1356,15 +1392,21 @@ const extractCreateOperatorClassDependencies = (
         accessMethod || undefined,
       ),
     );
+    if (!operatorFamilyRef) {
+      provides.push(
+        createObjectRefFromAst(
+          "operator_family",
+          operatorClassRef.name,
+          operatorClassRef.schema,
+          accessMethod || undefined,
+        ),
+      );
+    }
     if (operatorClassRef.schema) {
       requires.push(createObjectRefFromAst("schema", operatorClassRef.schema));
     }
   }
 
-  const operatorFamilyRef = objectFromNameParts(
-    "operator_family",
-    extractNameParts(statementNode.opfamilyname),
-  );
   if (operatorFamilyRef) {
     // CREATE OPERATOR CLASS ... FAMILY requires the named family to exist for
     // the same access method before the class can be created.
@@ -1424,6 +1466,14 @@ const extractCreateOperatorClassDependencies = (
       const functionRef = objectWithArgsRef("function", itemName);
       if (functionRef) {
         requires.push(functionRef);
+      }
+      continue;
+    }
+
+    if (item.itemtype === OPCLASS_ITEM_STORAGE) {
+      const storageTypeRef = typeFromTypeNameNode(item.storedtype);
+      if (storageTypeRef) {
+        requires.push(storageTypeRef);
       }
     }
   }

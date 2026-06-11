@@ -876,6 +876,52 @@ const typeRefMatchesBuiltInNames = (
   );
 };
 
+const polymorphicBuiltInTypeNames = new Set([
+  "any",
+  "anyarray",
+  "anycompatible",
+  "anycompatiblearray",
+  "anycompatiblenonarray",
+  "anycompatiblemultirange",
+  "anycompatiblerange",
+  "anyelement",
+  "anyenum",
+  "anymultirange",
+  "anynonarray",
+  "anyrange",
+]);
+
+const typeRefMatchesPolymorphicBuiltInName = (
+  typeRef: ObjectRef | null,
+  typeName: string,
+): boolean => {
+  if (!typeRef || typeRef.kind !== "type") {
+    return false;
+  }
+
+  const normalizedTypeName = typeName.toLowerCase();
+  const normalizedRefName = typeRef.name.toLowerCase();
+  if (
+    normalizedTypeName === "anyarray" ||
+    normalizedTypeName === "anycompatiblearray"
+  ) {
+    return normalizedRefName.endsWith("[]");
+  }
+  if (normalizedTypeName === "anyenum") {
+    return !normalizedRefName.endsWith("[]");
+  }
+
+  return polymorphicBuiltInTypeNames.has(normalizedTypeName);
+};
+
+const typeRefMatchesBuiltInSupportTypeName = (
+  typeRef: ObjectRef | null,
+  typeName: string,
+): boolean =>
+  polymorphicBuiltInTypeNames.has(typeName.toLowerCase())
+    ? typeRefMatchesPolymorphicBuiltInName(typeRef, typeName)
+    : typeRefMatchesBuiltInNames(typeRef, [typeName]);
+
 const isBuiltInRangeOperatorClassName = (
   nameParts: string[],
   subtypeRef: ObjectRef | null,
@@ -1038,7 +1084,7 @@ const isBuiltInOperatorClassSupportFunctionName = (
     (signature) =>
       args.length === signature.length &&
       signature.every((typeName, index) =>
-        typeRefMatchesBuiltInNames(args[index] ?? null, [typeName]),
+        typeRefMatchesBuiltInSupportTypeName(args[index] ?? null, typeName),
       ),
   );
 };
@@ -1330,8 +1376,14 @@ const extractCreateRangeDependencies = (
     if (optionName === "collation") {
       const collationNameParts = extractNameParts(typeName?.names);
       const collationRef = objectFromNameParts("collation", collationNameParts);
-      if (collationRef && !isBuiltInRangeCollationName(collationNameParts)) {
-        requires.push(collationRef);
+      if (collationRef) {
+        if (isBuiltInRangeCollationName(collationNameParts)) {
+          if (collationNameParts.length === 1) {
+            requires.push(markOmitIfNoLocalProducerRef(collationRef));
+          }
+        } else {
+          requires.push(collationRef);
+        }
       }
       continue;
     }
@@ -1375,13 +1427,7 @@ const extractCreateRangeDependencies = (
         rangeRef?.schema ?? DEFAULT_SCHEMA,
       );
       if (multirangeRef) {
-        provides.push(
-          createObjectRefFromAst(
-            "type",
-            multirangeRef.name,
-            multirangeRef.schema,
-          ),
-        );
+        provides.push(...typeProviderRefs(multirangeRef));
         if (multirangeRef.schema) {
           requires.push(createObjectRefFromAst("schema", multirangeRef.schema));
         }
@@ -1411,10 +1457,12 @@ const extractCreateRangeDependencies = (
     // The name is derived from the range type unless MULTIRANGE_TYPE_NAME is
     // present, in which case the explicit option above is the only provider.
     provides.push(
-      createObjectRefFromAst(
-        "type",
-        defaultMultirangeTypeName(rangeRef.name),
-        rangeRef.schema,
+      ...typeProviderRefs(
+        createObjectRefFromAst(
+          "type",
+          defaultMultirangeTypeName(rangeRef.name),
+          rangeRef.schema,
+        ),
       ),
     );
   }
@@ -1870,12 +1918,20 @@ const extractCreateOperatorClassDependencies = (
         }
       }
 
-      if (
-        isBuiltInOperatorClassSupportFunctionName(
-          nameParts,
-          objectWithArgsTypeRefs(itemName),
-        )
-      ) {
+      const functionArgs = objectWithArgsTypeRefs(itemName);
+      if (isBuiltInOperatorClassSupportFunctionName(nameParts, functionArgs)) {
+        if (nameParts.length === 1) {
+          const functionRef = objectWithArgsRef(
+            "function",
+            itemName,
+            functionArgs,
+          );
+          if (functionRef) {
+            requires.push(
+              markOmitIfNoLocalProducerRef(markExactSignatureRef(functionRef)),
+            );
+          }
+        }
         continue;
       }
 

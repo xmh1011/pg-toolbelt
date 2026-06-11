@@ -172,6 +172,7 @@ const extractAlterTableDependencies = (
   for (const commandNode of commands) {
     const command = asRecord(asRecord(commandNode)?.AlterTableCmd);
     const constraint = asRecord(asRecord(command?.def)?.Constraint);
+    const columnDefinition = asRecord(asRecord(command?.def)?.ColumnDef);
     if (constraint?.contype === "CONSTR_FOREIGN") {
       addForeignConstraintDependencies(constraint, requires);
     }
@@ -187,6 +188,26 @@ const extractAlterTableDependencies = (
       if (providedKey) {
         provides.push(providedKey);
       }
+    }
+    if (constraint?.raw_expr) {
+      addExpressionDependencies(constraint.raw_expr, requires);
+    }
+
+    if (columnDefinition?.raw_default) {
+      addExpressionDependencies(columnDefinition.raw_default, requires);
+    }
+    const columnConstraints = Array.isArray(columnDefinition?.constraints)
+      ? columnDefinition.constraints
+      : [];
+    for (const constraintItem of columnConstraints) {
+      const columnConstraint = asRecord(asRecord(constraintItem)?.Constraint);
+      if (columnConstraint?.raw_expr) {
+        addExpressionDependencies(columnConstraint.raw_expr, requires);
+      }
+    }
+
+    if (command?.subtype === "AT_ColumnDefault" && command.def) {
+      addExpressionDependencies(command.def, requires);
     }
 
     if (command?.subtype === "AT_ChangeOwner") {

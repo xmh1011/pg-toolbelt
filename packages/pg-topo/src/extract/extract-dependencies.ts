@@ -680,7 +680,10 @@ const extractAlterSubscriptionDependencies = (
     );
   }
 
-  if (statementNode.kind === "ALTER_SUBSCRIPTION_SET_PUBLICATION") {
+  if (
+    statementNode.kind === "ALTER_SUBSCRIPTION_SET_PUBLICATION" ||
+    statementNode.kind === "ALTER_SUBSCRIPTION_ADD_PUBLICATION"
+  ) {
     const publications = Array.isArray(statementNode.publication)
       ? statementNode.publication
       : [];

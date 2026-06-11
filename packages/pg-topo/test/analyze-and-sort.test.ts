@@ -162,6 +162,39 @@ describe("analyzeAndSort", () => {
     expect(hasUnknownClass).toBe(false);
   });
 
+  test("orders ALTER SUBSCRIPTION ADD PUBLICATION after referenced subscription and publications", async () => {
+    const result = await analyzeAndSort([
+      "alter subscription sub_orders add publication pub_events;",
+      "create subscription sub_orders connection 'host=localhost port=5432 dbname=postgres' publication pub_orders with (connect = false);",
+      "create publication pub_orders;",
+      "create publication pub_events;",
+    ]);
+    const orderedClasses = result.ordered.map(
+      (statement) => statement.statementClass,
+    );
+    const hasUnknownClass = result.diagnostics.some(
+      (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
+    );
+
+    expect(orderedClasses).toEqual([
+      "CREATE_PUBLICATION",
+      "CREATE_PUBLICATION",
+      "CREATE_SUBSCRIPTION",
+      "ALTER_SUBSCRIPTION",
+    ]);
+    expect(result.ordered[0]?.sql.toLowerCase()).toContain("pub_orders");
+    expect(result.ordered[1]?.sql.toLowerCase()).toContain("pub_events");
+    expect(
+      result.graph.edges.some(
+        (edge) =>
+          edge.reason === "requires" &&
+          edge.objectRef.kind === "publication" &&
+          edge.objectRef.name === "pub_events",
+      ),
+    ).toBe(true);
+    expect(hasUnknownClass).toBe(false);
+  });
+
   test("statement ids include sourceOffset when parser provides location", async () => {
     const result = await analyzeAndSort([
       "create table public.t1(id int);",

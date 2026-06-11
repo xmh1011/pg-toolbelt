@@ -213,6 +213,64 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
 
+  test("targets btree operator classes when access methods share a class name", async () => {
+    const result = await analyzeAndSort([
+      "create table app.measurements(id int primary key, value_span app.custom_int4_range not null);",
+      "create type app.custom_int4_range as range (subtype = int4, subtype_opclass = app.shared_int4_ops);",
+      "create operator class app.shared_int4_ops for type int4 using hash as operator 1 = (int4, int4), function 1 hashint4(int4);",
+      "create operator class app.shared_int4_ops for type int4 using btree as operator 1 < (int4, int4), operator 2 <= (int4, int4), operator 3 = (int4, int4), operator 4 >= (int4, int4), operator 5 > (int4, int4), function 1 btint4cmp(int4, int4);",
+      "create schema app;",
+    ]);
+    const duplicateCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "DUPLICATE_PRODUCER",
+    ).length;
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.custom_int4_range"),
+    );
+
+    expect(duplicateCount).toBe(0);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "operator_class",
+      schema: "app",
+      name: "shared_int4_ops",
+      signature: "(btree)",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const schemaIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create schema app"),
+    );
+    const hashOperatorClassIndex = orderedSql.findIndex(
+      (sql) =>
+        sql.includes("create operator class app.shared_int4_ops") &&
+        sql.includes("using hash"),
+    );
+    const btreeOperatorClassIndex = orderedSql.findIndex(
+      (sql) =>
+        sql.includes("create operator class app.shared_int4_ops") &&
+        sql.includes("using btree"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.custom_int4_range"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.measurements"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(schemaIndex).toBeGreaterThanOrEqual(0);
+    expect(hashOperatorClassIndex).toBeGreaterThan(schemaIndex);
+    expect(btreeOperatorClassIndex).toBeGreaterThan(schemaIndex);
+    expect(rangeIndex).toBeGreaterThan(btreeOperatorClassIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
+
   test("orders custom operator classes after conventional support operators for custom types", async () => {
     const result = await analyzeAndSort([
       "create table app.measurements(id int primary key, value_span app.score_range not null);",
@@ -438,6 +496,71 @@ describe("range type dependencies", () => {
     expect(operatorClassIndex).toBeGreaterThan(lastOperatorIndex);
     expect(rangeIndex).toBeGreaterThan(operatorClassIndex);
     expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
+
+  test("records operator estimator functions as operator dependencies", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<# (function = app.score_lt, leftarg = app.score, rightarg = app.score, restrict = app.score_sel, join = app.score_join);",
+      "create function app.score_join(internal, oid, internal, smallint, internal) returns float8 language internal stable strict as 'eqjoinsel';",
+      "create function app.score_sel(internal, oid, internal, integer) returns float8 language internal stable strict as 'eqsel';",
+      "create function app.score_lt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value < (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unknownCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
+    ).length;
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<#"),
+    );
+
+    expect(unknownCount).toBe(0);
+    expect(unresolvedCount).toBe(0);
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_sel",
+    });
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_join",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const typeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.score as"),
+    );
+    const operatorFunctionIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function app.score_lt"),
+    );
+    const restrictFunctionIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function app.score_sel"),
+    );
+    const joinFunctionIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function app.score_join"),
+    );
+    const operatorIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator app.<#"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(typeIndex).toBeGreaterThanOrEqual(0);
+    expect(operatorFunctionIndex).toBeGreaterThan(typeIndex);
+    expect(restrictFunctionIndex).toBeGreaterThan(typeIndex);
+    expect(joinFunctionIndex).toBeGreaterThan(typeIndex);
+    expect(operatorIndex).toBeGreaterThan(operatorFunctionIndex);
+    expect(operatorIndex).toBeGreaterThan(restrictFunctionIndex);
+    expect(operatorIndex).toBeGreaterThan(joinFunctionIndex);
   }, 120000);
 
   test("does not require producer statements for built-in range operator classes", async () => {

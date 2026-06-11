@@ -99,6 +99,19 @@ describe("classifyStatement", () => {
     ).toBe("CREATE_OPERATOR_CLASS");
   });
 
+  test("returns CREATE_OPERATOR_FAMILY for CreateOpFamilyStmt", () => {
+    expect(
+      classifyStatement({
+        CreateOpFamilyStmt: {
+          opfamilyname: [
+            { String: { sval: "app" } },
+            { String: { sval: "score_family" } },
+          ],
+        },
+      }),
+    ).toBe("CREATE_OPERATOR_FAMILY");
+  });
+
   test("returns CREATE_OPERATOR for operator DefineStmt", () => {
     expect(
       classifyStatement({

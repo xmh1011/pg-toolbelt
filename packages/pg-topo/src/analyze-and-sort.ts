@@ -12,6 +12,7 @@ import { buildGraph, type EdgeMetadata } from "./graph/build-graph.ts";
 import { compareStatementIndices, topoSort } from "./graph/topo-sort.ts";
 import { type ParsedStatement, parseSqlContent } from "./ingest/parse.ts";
 import {
+  isImplicitProvider,
   objectRefKey,
   shouldOmitIfNoLocalProducer,
 } from "./model/object-ref.ts";
@@ -124,6 +125,46 @@ const omitRequirementsWithoutLocalProducers = (
         !shouldOmitIfNoLocalProducer(requiredRef) ||
         providerKeys.has(objectRefKey(requiredRef)),
     );
+  }
+};
+
+const resolveExplicitOperatorFamilyProviders = (
+  statementNodes: StatementNode[],
+): void => {
+  const explicitProviderKeys = new Set<string>();
+  for (const statementNode of statementNodes) {
+    for (const providedRef of statementNode.provides) {
+      if (!isImplicitProvider(providedRef)) {
+        explicitProviderKeys.add(objectRefKey(providedRef));
+      }
+    }
+  }
+
+  for (const statementNode of statementNodes) {
+    const removedImplicitProviders = statementNode.provides.filter(
+      (providedRef) =>
+        isImplicitProvider(providedRef) &&
+        explicitProviderKeys.has(objectRefKey(providedRef)),
+    );
+    if (removedImplicitProviders.length === 0) {
+      continue;
+    }
+
+    const removedKeys = new Set(removedImplicitProviders.map(objectRefKey));
+    statementNode.provides = statementNode.provides.filter(
+      (providedRef) => !removedKeys.has(objectRefKey(providedRef)),
+    );
+
+    for (const removedProvider of removedImplicitProviders) {
+      if (
+        !statementNode.requires.some(
+          (requiredRef) =>
+            objectRefKey(requiredRef) === objectRefKey(removedProvider),
+        )
+      ) {
+        statementNode.requires.push(removedProvider);
+      }
+    }
   }
 };
 
@@ -240,6 +281,7 @@ export const analyzeAndSort = async (
   }
 
   addImplicitRangeOperatorClassDependencies(statementNodes, parsedStatements);
+  resolveExplicitOperatorFamilyProviders(statementNodes);
   omitRequirementsWithoutLocalProducers(statementNodes);
 
   const graphState = buildGraph(statementNodes, options?.externalProviders);

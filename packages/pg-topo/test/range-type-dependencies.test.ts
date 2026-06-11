@@ -596,6 +596,37 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("requires exact operator estimator signatures", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<# (function = app.score_lt, leftarg = app.score, rightarg = app.score, restrict = app.score_sel, join = app.score_join);",
+      "create function app.score_join(internal, oid, internal, int2, internal, extra text default '') returns float8 language internal stable strict as 'eqjoinsel';",
+      "create function app.score_sel(internal, oid, internal, int4, extra text default '') returns float8 language internal stable strict as 'eqsel';",
+      "create function app.score_lt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value < (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<#"),
+    );
+
+    expect(unresolved).toHaveLength(2);
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_sel",
+      signature: "(internal,oid,internal,int4)",
+    });
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_join",
+      signature: "(internal,oid,internal,int2,internal)",
+    });
+  });
+
   test("does not require producer statements for built-in operator estimators", async () => {
     const result = await analyzeAndSort([
       "create operator app.<# (function = app.score_lt, leftarg = app.score, rightarg = app.score, restrict = eqsel, join = eqjoinsel);",
@@ -702,6 +733,41 @@ describe("range type dependencies", () => {
 
     expect(executionErrors).toHaveLength(0);
   }, 120000);
+
+  test("requires exact operator implementation signatures", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.=== (function = app.score_eq, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_eq(a app.score, b app.score, extra int4 default 0) returns boolean language sql immutable strict as $$ select (a).value = (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolvedImplementation = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_eq",
+        ) === true,
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.==="),
+    );
+
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_eq",
+      signature: "(app.score,app.score)",
+    });
+    expect(unresolvedImplementation?.objectRefs).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_eq",
+      signature: "(app.score,app.score)",
+    });
+  });
 
   test("distinguishes prefix and postfix operator signatures", async () => {
     const result = await analyzeAndSort([
@@ -872,6 +938,41 @@ describe("range type dependencies", () => {
       signature: "(app.score,app.score)",
     });
   }, 120000);
+
+  test("requires exact range support routine signatures", async () => {
+    const result = await analyzeAndSort([
+      "create type app.score_range as range (subtype = int4, canonical = app.score_canonical);",
+      "create function app.score_canonical(value app.score_range, extra int4 default 0) returns app.score_range language sql immutable as $$ select value $$;",
+      "create type app.score_range;",
+      "create schema app;",
+    ]);
+    const unresolvedCanonicalDependency = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_canonical",
+        ) === true,
+    );
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.score_range as"),
+    );
+
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_canonical",
+      signature: "(app.score_range)",
+    });
+    expect(unresolvedCanonicalDependency?.objectRefs).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_canonical",
+      signature: "(app.score_range)",
+    });
+  });
 
   test("requires custom opclass functions when built-in names use different argument types", async () => {
     const result = await analyzeAndSort([
@@ -1313,6 +1414,51 @@ describe("range type dependencies", () => {
     expect(operatorClassIndex).toBeGreaterThan(familyIndex);
   }, 120000);
 
+  test("matches order-by operator family signatures to providers", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by app.score_sort_family, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
+      "create operator family app.score_sort_family using btree;",
+      "create operator <-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
+      "create function app.score_union(internal, internal) returns app.score language internal immutable strict as 'gbt_int4_union';",
+      "create function app.score_compress(internal) returns internal language internal immutable strict as 'gbt_int4_compress';",
+      "create function app.score_decompress(internal) returns internal language internal immutable strict as 'gbt_int4_decompress';",
+      "create function app.score_penalty(internal, internal, internal) returns internal language internal immutable strict as 'gbt_int4_penalty';",
+      "create function app.score_picksplit(internal, internal) returns internal language internal immutable strict as 'gbt_int4_picksplit';",
+      "create function app.score_same(app.score, app.score, internal) returns internal language internal immutable strict as 'gbt_int4_same';",
+      "create function app.score_distance(a app.score, b app.score) returns float8 language sql immutable strict as $$ select abs((a).value - (b).value)::float8 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const operatorFamilyStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator family app.score_sort_family"),
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(operatorFamilyStatement?.provides).toContainEqual({
+      kind: "operator_family",
+      schema: "app",
+      name: "score_sort_family",
+      signature: "(btree)",
+    });
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "operator_family",
+      schema: "app",
+      name: "score_sort_family",
+      signature: "(btree)",
+    });
+  });
+
   test("does not require producer statements for built-in order-by operator families", async () => {
     const result = await analyzeAndSort([
       "create operator class app.score_float_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by float_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
@@ -1466,6 +1612,51 @@ describe("range type dependencies", () => {
     expect(providerIndex).toBeGreaterThanOrEqual(0);
     expect(consumerIndex).toBeGreaterThan(providerIndex);
   }, 120000);
+
+  test("does not duplicate explicitly created implicit operator families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using btree as operator 1 app.< (app.score, app.score), function 1 app.score_cmp(app.score, app.score);",
+      "create operator family app.score_ops using btree;",
+      "create operator app.< (function = app.score_lt, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select (a).value - (b).value $$;",
+      "create function app.score_lt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value < (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const duplicateCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "DUPLICATE_PRODUCER",
+    ).length;
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+    const operatorFamilyStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator family app.score_ops"),
+    );
+
+    expect(duplicateCount).toBe(0);
+    expect(operatorFamilyStatement?.provides).toContainEqual({
+      kind: "operator_family",
+      schema: "app",
+      name: "score_ops",
+      signature: "(btree)",
+    });
+    expect(operatorClassStatement?.provides).not.toContainEqual({
+      kind: "operator_family",
+      schema: "app",
+      name: "score_ops",
+      signature: "(btree)",
+    });
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "operator_family",
+      schema: "app",
+      name: "score_ops",
+      signature: "(btree)",
+    });
+  });
 
   test("uses opclass datatypes for omitted operator item arguments", async () => {
     const result = await analyzeAndSort([
@@ -2236,6 +2427,56 @@ describe("range type dependencies", () => {
       schema: "app",
       name: "widget_in",
       signature: "(cstring)",
+    });
+  });
+
+  test("accepts three-argument base type input callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create type app.widget (input = app.widget_in, output = app.widget_out, internallength = 4, alignment = int4);",
+      "create function app.widget_out(value app.widget) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.widget_in(value cstring, type_oid oid, typmod int4) returns app.widget language internal immutable strict as 'int4in';",
+      "create type app.widget;",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const baseTypeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.widget ("),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(baseTypeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "widget_in",
+      signature: "(cstring,oid,int4)",
+    });
+  });
+
+  test("accepts three-argument base type receive callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create type app.widget (input = app.widget_in, output = app.widget_out, receive = app.widget_recv, send = app.widget_send, internallength = 4, alignment = int4);",
+      "create function app.widget_send(value app.widget) returns bytea language internal immutable strict as 'int4send';",
+      "create function app.widget_recv(value internal, type_oid oid, typmod int4) returns app.widget language internal immutable strict as 'int4recv';",
+      "create function app.widget_out(value app.widget) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.widget_in(value cstring) returns app.widget language internal immutable strict as 'int4in';",
+      "create type app.widget;",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const baseTypeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.widget ("),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(baseTypeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "widget_recv",
+      signature: "(internal,oid,int4)",
     });
   });
 

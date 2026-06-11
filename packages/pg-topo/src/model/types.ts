@@ -58,6 +58,8 @@ export type ObjectRef = {
   signature?: string;
   exactSignature?: boolean;
   omitIfNoLocalProducer?: boolean;
+  alternativeKey?: string;
+  implicitProvider?: boolean;
 };
 
 export type AnnotationHints = {

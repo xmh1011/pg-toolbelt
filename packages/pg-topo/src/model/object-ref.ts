@@ -197,7 +197,7 @@ export const createObjectRefFromAst = (
 
 const markObjectRefFlag = (
   ref: ObjectRef,
-  key: "exactSignature" | "omitIfNoLocalProducer",
+  key: "exactSignature" | "omitIfNoLocalProducer" | "implicitProvider",
 ): ObjectRef => {
   Object.defineProperty(ref, key, {
     configurable: true,
@@ -218,6 +218,27 @@ export const markOmitIfNoLocalProducerRef = (ref: ObjectRef): ObjectRef =>
 
 export const shouldOmitIfNoLocalProducer = (ref: ObjectRef): boolean =>
   ref.omitIfNoLocalProducer === true;
+
+export const markAlternativeRef = (
+  ref: ObjectRef,
+  alternativeKey: string,
+): ObjectRef => {
+  Object.defineProperty(ref, "alternativeKey", {
+    configurable: true,
+    enumerable: false,
+    value: alternativeKey,
+  });
+  return ref;
+};
+
+export const alternativeRefKey = (ref: ObjectRef): string | undefined =>
+  ref.alternativeKey;
+
+export const markImplicitProviderRef = (ref: ObjectRef): ObjectRef =>
+  markObjectRefFlag(ref, "implicitProvider");
+
+export const isImplicitProvider = (ref: ObjectRef): boolean =>
+  ref.implicitProvider === true;
 
 // CREATE TYPE name; creates a shell type that support routines can reference,
 // but ordinary consumers still need the later concrete type definition.

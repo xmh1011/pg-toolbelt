@@ -3,6 +3,7 @@ import {
   signaturesCompatible,
 } from "../model/object-compat.ts";
 import {
+  alternativeRefKey,
   isBuiltInObjectRef,
   isShellTypeRef,
   objectRefKey,
@@ -246,6 +247,68 @@ const producerRequiresConsumer = (
     hasCompatibleProvidedObject(requiredRef, consumer.provides),
   );
 
+const hasLocalProducerForRequirement = (
+  requiredRef: ObjectRef,
+  consumerIndex: number,
+  nodes: StatementNode[],
+): boolean => {
+  const requiredKey = objectRefKey(requiredRef);
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (index === consumerIndex) {
+      continue;
+    }
+    const node = nodes[index];
+    if (!node) {
+      continue;
+    }
+    if (
+      node.provides.some(
+        (providedRef) => objectRefKey(providedRef) === requiredKey,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return producerIndicesForRequirement(requiredRef, nodes).some(
+    (producerIndex) => producerIndex !== consumerIndex,
+  );
+};
+
+const resolvableRequirements = (
+  requiredRefs: ObjectRef[],
+  consumerIndex: number,
+  nodes: StatementNode[],
+  externalByName: Map<string, ObjectRef[]>,
+): ObjectRef[] => {
+  const result: ObjectRef[] = [];
+  const alternativeGroups = new Map<string, ObjectRef[]>();
+
+  for (const requiredRef of requiredRefs) {
+    const alternativeKey = alternativeRefKey(requiredRef);
+    if (!alternativeKey) {
+      result.push(requiredRef);
+      continue;
+    }
+
+    const group = alternativeGroups.get(alternativeKey) ?? [];
+    group.push(requiredRef);
+    alternativeGroups.set(alternativeKey, group);
+  }
+
+  for (const group of alternativeGroups.values()) {
+    const matchedRefs = group.filter(
+      (requiredRef) =>
+        isBuiltInObjectRef(requiredRef) ||
+        hasLocalProducerForRequirement(requiredRef, consumerIndex, nodes) ||
+        externalProviderSatisfies(requiredRef, externalByName),
+    );
+    result.push(...(matchedRefs.length > 0 ? matchedRefs : group.slice(0, 1)));
+  }
+
+  return result;
+};
+
 export const buildGraph = (
   nodes: StatementNode[],
   externalProviders?: ObjectRef[],
@@ -319,7 +382,12 @@ export const buildGraph = (
     if (!consumer) {
       continue;
     }
-    for (const requiredRef of consumer.requires) {
+    for (const requiredRef of resolvableRequirements(
+      consumer.requires,
+      consumerIndex,
+      nodes,
+      externalByName,
+    )) {
       if (isBuiltInObjectRef(requiredRef)) {
         continue;
       }

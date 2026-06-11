@@ -5,7 +5,9 @@ import {
   DEFAULT_SCHEMA,
   dedupeObjectRefs,
   isBuiltInObjectRef,
+  markAlternativeRef,
   markExactSignatureRef,
+  markImplicitProviderRef,
   markOmitIfNoLocalProducerRef,
   SHELL_TYPE_SIGNATURE,
   splitQualifiedName,
@@ -1381,7 +1383,7 @@ const extractCreateRangeDependencies = (
         rangeFunctionArgs(optionName, rangeRef, subtypeRef),
       );
       if (functionRef) {
-        requires.push(functionRef);
+        requires.push(markExactSignatureRef(functionRef));
       }
     }
   }
@@ -1598,7 +1600,7 @@ const extractCreateOperatorDependencies = (
         operatorEstimatorFunctionArgs(optionName) ?? [],
       );
       if (estimatorFunctionRef) {
-        requires.push(estimatorFunctionRef);
+        requires.push(markExactSignatureRef(estimatorFunctionRef));
       }
       continue;
     }
@@ -1653,13 +1655,15 @@ const extractCreateOperatorDependencies = (
     )
   ) {
     requires.push(
-      createObjectRefFromAst(
-        "function",
-        functionRef.name,
-        functionRef.schema,
-        functionSignatureParts.length > 0
-          ? `(${functionSignatureParts.join(",")})`
-          : undefined,
+      markExactSignatureRef(
+        createObjectRefFromAst(
+          "function",
+          functionRef.name,
+          functionRef.schema,
+          functionSignatureParts.length > 0
+            ? `(${functionSignatureParts.join(",")})`
+            : undefined,
+        ),
       ),
     );
   }
@@ -1727,11 +1731,13 @@ const extractCreateOperatorClassDependencies = (
     );
     if (!operatorFamilyRef) {
       provides.push(
-        createObjectRefFromAst(
-          "operator_family",
-          operatorClassRef.name,
-          operatorClassRef.schema,
-          accessMethod || undefined,
+        markImplicitProviderRef(
+          createObjectRefFromAst(
+            "operator_family",
+            operatorClassRef.name,
+            operatorClassRef.schema,
+            accessMethod || undefined,
+          ),
         ),
       );
     }
@@ -1859,43 +1865,57 @@ const extractCreateOperatorClassDependencies = (
   return { provides, requires };
 };
 
-const baseTypeFunctionArgs = (
+const baseTypeFunctionArgAlternatives = (
   optionName: string,
   typeRef: ObjectRef | null,
-): ObjectRef[] | null => {
+): ObjectRef[][] => {
   if (!typeRef) {
-    return null;
+    return [];
   }
 
   if (optionName === "input") {
-    return [createObjectRefFromAst("type", "cstring")];
+    return [
+      [createObjectRefFromAst("type", "cstring")],
+      [
+        createObjectRefFromAst("type", "cstring"),
+        createObjectRefFromAst("type", "oid"),
+        createObjectRefFromAst("type", "int4"),
+      ],
+    ];
   }
 
   if (optionName === "output") {
-    return [typeRef];
+    return [[typeRef]];
   }
 
   if (optionName === "receive") {
-    return [createObjectRefFromAst("type", "internal")];
+    return [
+      [createObjectRefFromAst("type", "internal")],
+      [
+        createObjectRefFromAst("type", "internal"),
+        createObjectRefFromAst("type", "oid"),
+        createObjectRefFromAst("type", "int4"),
+      ],
+    ];
   }
 
   if (optionName === "send") {
-    return [typeRef];
+    return [[typeRef]];
   }
 
   if (optionName === "typmod_in") {
-    return [createObjectRefFromAst("type", "cstring[]")];
+    return [[createObjectRefFromAst("type", "cstring[]")]];
   }
 
   if (optionName === "typmod_out") {
-    return [createObjectRefFromAst("type", "int4")];
+    return [[createObjectRefFromAst("type", "int4")]];
   }
 
   if (optionName === "analyze" || optionName === "subscript") {
-    return [createObjectRefFromAst("type", "internal")];
+    return [[createObjectRefFromAst("type", "internal")]];
   }
 
-  return null;
+  return [];
 };
 
 const extractCreateBaseTypeDependencies = (
@@ -1943,16 +1963,25 @@ const extractCreateBaseTypeDependencies = (
       extractNameParts(functionTypeName?.names),
     );
     if (functionRef) {
-      requires.push(
-        markExactSignatureRef(
+      const alternatives = baseTypeFunctionArgAlternatives(optionName, typeRef);
+      for (const args of alternatives) {
+        const callbackRef = markExactSignatureRef(
           createObjectRefFromAst(
             "function",
             functionRef.name,
             functionRef.schema,
-            typeRefsSignature(baseTypeFunctionArgs(optionName, typeRef) ?? []),
+            typeRefsSignature(args),
           ),
-        ),
-      );
+        );
+        requires.push(
+          alternatives.length > 1
+            ? markAlternativeRef(
+                callbackRef,
+                `base_type:${typeRef?.schema ?? DEFAULT_SCHEMA}.${typeRef?.name}:${optionName}:${functionRef.schema ?? DEFAULT_SCHEMA}.${functionRef.name}`,
+              )
+            : callbackRef,
+        );
+      }
     }
   }
 

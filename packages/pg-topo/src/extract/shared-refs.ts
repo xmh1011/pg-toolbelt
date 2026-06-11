@@ -162,13 +162,13 @@ export const typeFromTypeNameNode = (
     Array.isArray(typeNameRecord.arrayBounds) &&
     typeNameRecord.arrayBounds.length > 0
   ) {
-    const builtInArrayRef = createObjectRefFromAst(
-      "type",
-      `${typeRef.name}${"[]".repeat(typeNameRecord.arrayBounds.length)}`,
-    );
+    const arrayName = `${typeRef.name}${"[]".repeat(typeNameRecord.arrayBounds.length)}`;
+    const builtInArrayRef = createObjectRefFromAst("type", arrayName);
     if (isBuiltInObjectRef(builtInArrayRef)) {
       return builtInArrayRef;
     }
+
+    return createObjectRefFromAst("type", arrayName, typeRef.schema);
   }
   return typeRef;
 };

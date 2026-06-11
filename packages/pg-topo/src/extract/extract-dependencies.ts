@@ -38,6 +38,11 @@ type ExtractDependenciesResult = {
   requires: ObjectRef[];
 };
 
+const typeProviderRefs = (typeRef: ObjectRef): ObjectRef[] => [
+  createObjectRefFromAst("type", typeRef.name, typeRef.schema),
+  createObjectRefFromAst("type", `${typeRef.name}[]`, typeRef.schema),
+];
+
 const extractCreateTableDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -814,6 +819,7 @@ const builtInRangeOperatorClassNames = new Set([
   "name_ops",
   "numeric_ops",
   "oid_ops",
+  "pg_lsn_ops",
   "record_ops",
   "text_ops",
   "time_ops",
@@ -847,6 +853,7 @@ const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
   ["name_ops", ["name"]],
   ["numeric_ops", ["numeric"]],
   ["oid_ops", ["oid"]],
+  ["pg_lsn_ops", ["pg_lsn"]],
   ["text_ops", ["text"]],
   ["time_ops", ["time"]],
   ["timestamp_ops", ["timestamp"]],
@@ -911,11 +918,18 @@ const isBuiltInBtreeOperatorFamilyName = (nameParts: string[]): boolean => {
     return false;
   }
 
-  if (nameParts.length === 1) {
-    return true;
-  }
-
   return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
+};
+
+const isUnqualifiedBuiltInBtreeOperatorFamilyName = (
+  nameParts: string[],
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  return (
+    nameParts.length === 1 &&
+    name !== undefined &&
+    builtInBtreeOperatorFamilyNames.has(name)
+  );
 };
 
 // Opclass items commonly reference pg_catalog support objects without schema
@@ -1285,9 +1299,7 @@ const extractCreateRangeDependencies = (
     extractNameParts(statementNode.typeName),
   );
   if (rangeRef) {
-    provides.push(
-      createObjectRefFromAst("type", rangeRef.name, rangeRef.schema),
-    );
+    provides.push(...typeProviderRefs(rangeRef));
     if (rangeRef.schema) {
       requires.push(createObjectRefFromAst("schema", rangeRef.schema));
     }
@@ -1330,21 +1342,27 @@ const extractCreateRangeDependencies = (
         "operator_class",
         operatorClassNameParts,
       );
-      if (
-        operatorClassRef &&
-        !isBuiltInRangeOperatorClassName(operatorClassNameParts, subtypeRef)
-      ) {
+      if (operatorClassRef) {
         // PostgreSQL range subtypes resolve SUBTYPE_OPCLASS against the btree
         // access method, even when another method has an opclass with the same
         // schema/name.
-        requires.push(
-          createObjectRefFromAst(
-            "operator_class",
-            operatorClassRef.name,
-            operatorClassRef.schema,
-            "btree",
-          ),
+        const operatorClassRequirement = createObjectRefFromAst(
+          "operator_class",
+          operatorClassRef.name,
+          operatorClassRef.schema,
+          "btree",
         );
+        if (
+          isBuiltInRangeOperatorClassName(operatorClassNameParts, subtypeRef)
+        ) {
+          if (operatorClassNameParts.length === 1) {
+            requires.push(
+              markOmitIfNoLocalProducerRef(operatorClassRequirement),
+            );
+          }
+        } else {
+          requires.push(operatorClassRequirement);
+        }
       }
       continue;
     }
@@ -1446,6 +1464,18 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["boolle", [["bool", "bool"]]],
   ["boollt", [["bool", "bool"]]],
   ["boolne", [["bool", "bool"]]],
+  ["float4eq", [["float4", "float4"]]],
+  ["float4ge", [["float4", "float4"]]],
+  ["float4gt", [["float4", "float4"]]],
+  ["float4le", [["float4", "float4"]]],
+  ["float4lt", [["float4", "float4"]]],
+  ["float4ne", [["float4", "float4"]]],
+  ["float8eq", [["float8", "float8"]]],
+  ["float8ge", [["float8", "float8"]]],
+  ["float8gt", [["float8", "float8"]]],
+  ["float8le", [["float8", "float8"]]],
+  ["float8lt", [["float8", "float8"]]],
+  ["float8ne", [["float8", "float8"]]],
   ["int2eq", [["int2", "int2"]]],
   ["int2ge", [["int2", "int2"]]],
   ["int2gt", [["int2", "int2"]]],
@@ -1788,18 +1818,20 @@ const extractCreateOperatorClassDependencies = (
         extractNameParts(item.order_family),
       );
       const orderFamilyNameParts = extractNameParts(item.order_family);
-      if (
-        orderFamilyRef &&
-        !isBuiltInBtreeOperatorFamilyName(orderFamilyNameParts)
-      ) {
-        requires.push(
-          createObjectRefFromAst(
-            "operator_family",
-            orderFamilyRef.name,
-            orderFamilyRef.schema,
-            "(btree)",
-          ),
+      if (orderFamilyRef) {
+        const orderFamilyRequirement = createObjectRefFromAst(
+          "operator_family",
+          orderFamilyRef.name,
+          orderFamilyRef.schema,
+          "(btree)",
         );
+        if (!isBuiltInBtreeOperatorFamilyName(orderFamilyNameParts)) {
+          requires.push(
+            isUnqualifiedBuiltInBtreeOperatorFamilyName(orderFamilyNameParts)
+              ? markOmitIfNoLocalProducerRef(orderFamilyRequirement)
+              : orderFamilyRequirement,
+          );
+        }
       }
 
       if (
@@ -1929,7 +1961,7 @@ const extractCreateBaseTypeDependencies = (
     extractNameParts(statementNode.defnames),
   );
   if (typeRef) {
-    provides.push(createObjectRefFromAst("type", typeRef.name, typeRef.schema));
+    provides.push(...typeProviderRefs(typeRef));
     if (typeRef.schema) {
       requires.push(createObjectRefFromAst("schema", typeRef.schema));
     }
@@ -2338,9 +2370,7 @@ const extractDependencyRefs = (
         return rangeDependencies;
       }
       return {
-        provides: typeRef
-          ? [createObjectRefFromAst("type", typeRef.name, typeRef.schema)]
-          : [],
+        provides: typeRef ? typeProviderRefs(typeRef) : [],
         requires: typeRef?.schema
           ? [createObjectRefFromAst("schema", typeRef.schema)]
           : [],

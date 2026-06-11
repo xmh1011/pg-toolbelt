@@ -58,9 +58,9 @@ describe("statement coverage", () => {
     const unknownCount = result.diagnostics.filter(
       (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
     ).length;
-    const unresolvedCount = result.diagnostics.filter(
+    const unresolvedDiagnostics = result.diagnostics.filter(
       (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
-    ).length;
+    );
     const orderedSql = result.ordered.map((statement) =>
       statement.sql.toLowerCase(),
     );
@@ -75,7 +75,10 @@ describe("statement coverage", () => {
     );
 
     expect(unknownCount).toBe(0);
-    expect(unresolvedCount).toBe(0);
+    expect(unresolvedDiagnostics).toHaveLength(1);
+    expect(unresolvedDiagnostics[0]?.message).toContain(
+      "No default btree operator class provider found for range subtype 'app.price'.",
+    );
     expect(schemaIndex).toBeGreaterThan(-1);
     expect(subtypeIndex).toBeGreaterThan(schemaIndex);
     expect(rangeIndex).toBeGreaterThan(subtypeIndex);

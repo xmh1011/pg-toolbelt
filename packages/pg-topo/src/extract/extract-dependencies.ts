@@ -162,7 +162,7 @@ const extractCreateTableAsDependencies = (
     provides.push(
       createObjectRefFromAst(kind, relationRef.name, relationRef.schema),
     );
-    if (kind === "table") {
+    if (kind === "table" || kind === "materialized_view") {
       provides.push(...relationRowTypeProviderRefs(relationRef));
     }
     if (relationRef.schema) {
@@ -352,6 +352,7 @@ const extractViewDependencies = (
   const tableRef = relationFromRangeVarNode(viewRelation, "table");
   if (tableRef) {
     provides.push(createObjectRefFromAst(kind, tableRef.name, tableRef.schema));
+    provides.push(...relationRowTypeProviderRefs(tableRef));
     // A plain view implicitly owns an "_RETURN" ON SELECT rewrite rule. Expose it
     // so `COMMENT ON RULE "_RETURN" ON <view>` resolves to the view instead of
     // reporting an unresolved dependency. Materialized views have no such rule.
@@ -1691,17 +1692,26 @@ const extractCreateOperatorDependencies = (
       const estimatorFunctionNameParts = extractNameParts(
         asRecord(typeName)?.names,
       );
-      if (isBuiltInOperatorEstimatorFunctionName(estimatorFunctionNameParts)) {
-        continue;
-      }
-
       const estimatorFunctionRef = objectRefFromNamePartsWithArgs(
         "function",
         estimatorFunctionNameParts,
         operatorEstimatorFunctionArgs(optionName) ?? [],
       );
       if (estimatorFunctionRef) {
-        requires.push(markExactSignatureRef(estimatorFunctionRef));
+        const exactEstimatorFunctionRef =
+          markExactSignatureRef(estimatorFunctionRef);
+        if (
+          isBuiltInOperatorEstimatorFunctionName(estimatorFunctionNameParts)
+        ) {
+          if (estimatorFunctionNameParts.length === 1) {
+            requires.push(
+              markOmitIfNoLocalProducerRef(exactEstimatorFunctionRef),
+            );
+          }
+          continue;
+        }
+
+        requires.push(exactEstimatorFunctionRef);
       }
       continue;
     }
@@ -1748,25 +1758,30 @@ const extractCreateOperatorDependencies = (
   }
 
   const functionRef = objectFromNameParts("function", functionNameParts);
-  if (
-    functionRef &&
-    !isBuiltInOperatorImplementationFunctionName(
-      functionNameParts,
-      functionArgRefs,
-    )
-  ) {
-    requires.push(
-      markExactSignatureRef(
-        createObjectRefFromAst(
-          "function",
-          functionRef.name,
-          functionRef.schema,
-          functionSignatureParts.length > 0
-            ? `(${functionSignatureParts.join(",")})`
-            : undefined,
-        ),
+  if (functionRef) {
+    const exactFunctionRef = markExactSignatureRef(
+      createObjectRefFromAst(
+        "function",
+        functionRef.name,
+        functionRef.schema,
+        functionSignatureParts.length > 0
+          ? `(${functionSignatureParts.join(",")})`
+          : undefined,
       ),
     );
+
+    if (
+      isBuiltInOperatorImplementationFunctionName(
+        functionNameParts,
+        functionArgRefs,
+      )
+    ) {
+      if (functionNameParts.length === 1) {
+        requires.push(markOmitIfNoLocalProducerRef(exactFunctionRef));
+      }
+    } else {
+      requires.push(exactFunctionRef);
+    }
   }
 
   return { provides, requires };
@@ -2498,7 +2513,7 @@ const extractDependencyRefs = (
       }
 
       return {
-        provides: domainRef ? [domainRef] : [],
+        provides: domainRef ? [domainRef, ...typeProviderRefs(domainRef)] : [],
         requires,
       };
     }

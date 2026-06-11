@@ -12,8 +12,13 @@ import { buildGraph, type EdgeMetadata } from "./graph/build-graph.ts";
 import { compareStatementIndices, topoSort } from "./graph/topo-sort.ts";
 import { type ParsedStatement, parseSqlContent } from "./ingest/parse.ts";
 import {
+  isKindCompatible,
+  signaturesCompatible,
+} from "./model/object-compat.ts";
+import {
   isImplicitProvider,
   objectRefKey,
+  requiresExactSignature,
   shouldOmitIfNoLocalProducer,
 } from "./model/object-ref.ts";
 import type {
@@ -68,6 +73,7 @@ const compareDiagnostics = (left: Diagnostic, right: Diagnostic): number => {
 const addImplicitRangeOperatorClassDependencies = (
   statementNodes: StatementNode[],
   parsedStatements: ParsedStatement[],
+  diagnostics: Diagnostic[],
 ): void => {
   for (let index = 0; index < statementNodes.length; index += 1) {
     const statementNode = statementNodes[index];
@@ -106,6 +112,23 @@ const addImplicitRangeOperatorClassDependencies = (
         statementNode.requires.push(providerRef);
       }
     }
+
+    if (rangeOperatorClassRefs.size === 0) {
+      const subtypeName = subtypeRef.schema
+        ? `${subtypeRef.schema}.${subtypeRef.name}`
+        : subtypeRef.name;
+      diagnostics.push({
+        code: "UNRESOLVED_DEPENDENCY",
+        message: `No default btree operator class provider found for range subtype '${subtypeName}'.`,
+        statementId: statementNode.id,
+        objectRefs: [subtypeRef],
+        suggestedFix:
+          "Add a default btree operator class for the range subtype or specify SUBTYPE_OPCLASS explicitly.",
+        details: {
+          rangeSubtype: subtypeName,
+        },
+      });
+    }
   }
 };
 
@@ -119,11 +142,44 @@ const omitRequirementsWithoutLocalProducers = (
     }
   }
 
+  const hasLocalProducer = (
+    requiredRef: NonNullable<StatementNode["requires"][number]>,
+  ): boolean => {
+    const requiredKey = objectRefKey(requiredRef);
+    if (providerKeys.has(requiredKey)) {
+      return true;
+    }
+
+    for (const statementNode of statementNodes) {
+      for (const providedRef of statementNode.provides) {
+        if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
+          continue;
+        }
+        if (providedRef.name !== requiredRef.name) {
+          continue;
+        }
+        if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
+          continue;
+        }
+        if (
+          !signaturesCompatible(requiredRef.signature, providedRef.signature, {
+            requireExactArity: requiresExactSignature(requiredRef),
+          })
+        ) {
+          continue;
+        }
+        return true;
+      }
+    }
+
+    return false;
+  };
+
   for (const statementNode of statementNodes) {
     statementNode.requires = statementNode.requires.filter(
       (requiredRef) =>
         !shouldOmitIfNoLocalProducer(requiredRef) ||
-        providerKeys.has(objectRefKey(requiredRef)),
+        hasLocalProducer(requiredRef),
     );
   }
 };
@@ -280,7 +336,11 @@ export const analyzeAndSort = async (
     });
   }
 
-  addImplicitRangeOperatorClassDependencies(statementNodes, parsedStatements);
+  addImplicitRangeOperatorClassDependencies(
+    statementNodes,
+    parsedStatements,
+    diagnostics,
+  );
   resolveExplicitOperatorFamilyProviders(statementNodes);
   omitRequirementsWithoutLocalProducers(statementNodes);
 

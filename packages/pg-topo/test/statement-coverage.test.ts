@@ -85,7 +85,8 @@ describe("statement coverage", () => {
     const result = await analyzeAndSort([
       "create type app.positive_int_range as range (subtype = int4, canonical = app.positive_int_range_canonical, subtype_diff = app.positive_int_range_subdiff);",
       "create function app.positive_int_range_subdiff(a int4, b int4) returns float8 language sql immutable as 'select (a - b)::float8';",
-      "create function app.positive_int_range_canonical(value int4) returns int4 language sql immutable as 'select value';",
+      "create function app.positive_int_range_canonical(value app.positive_int_range) returns app.positive_int_range language internal immutable as 'int4range_canonical';",
+      "create type app.positive_int_range;",
       "create schema app;",
     ]);
     const unknownCount = result.diagnostics.filter(
@@ -104,7 +105,7 @@ describe("statement coverage", () => {
       sql.includes("positive_int_range_subdiff"),
     );
     const rangeIndex = orderedSql.findIndex((sql) =>
-      sql.includes("create type app.positive_int_range"),
+      sql.includes("create type app.positive_int_range as range"),
     );
 
     expect(unknownCount).toBe(0);

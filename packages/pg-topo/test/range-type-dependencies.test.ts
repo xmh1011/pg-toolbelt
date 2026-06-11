@@ -2519,9 +2519,12 @@ describe("range type dependencies", () => {
 
   test("provides array refs for composite and table row types", async () => {
     const result = await analyzeAndSort([
-      "create table app.events(id int primary key, rows app.row_type[] not null, sources app.source_table[] not null);",
+      "create table app.events(id int primary key, emails app.email[] not null, rows app.row_type[] not null, sources app.source_table[] not null, view_rows app.source_view[] not null, materialized_rows app.source_mat_view[] not null);",
+      "create domain app.email as text;",
       "create type app.row_type as (value int4);",
       "create table app.source_table(id int primary key);",
+      "create view app.source_view as select id from app.source_table;",
+      "create materialized view app.source_mat_view as select id from app.source_table;",
       "create schema app;",
     ]);
     const validation = await validateAnalyzeResultWithPostgres(result);
@@ -2534,8 +2537,19 @@ describe("range type dependencies", () => {
     const compositeStatement = result.ordered.find((statement) =>
       statement.sql.toLowerCase().includes("create type app.row_type"),
     );
+    const domainStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create domain app.email"),
+    );
     const sourceTableStatement = result.ordered.find((statement) =>
       statement.sql.toLowerCase().includes("create table app.source_table"),
+    );
+    const sourceViewStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create view app.source_view"),
+    );
+    const sourceMatViewStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create materialized view app.source_mat_view"),
     );
     const orderedSql = result.ordered.map((statement) =>
       statement.sql.toLowerCase(),
@@ -2543,8 +2557,17 @@ describe("range type dependencies", () => {
     const compositeIndex = orderedSql.findIndex((sql) =>
       sql.includes("create type app.row_type"),
     );
+    const domainIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create domain app.email"),
+    );
     const sourceTableIndex = orderedSql.findIndex((sql) =>
       sql.includes("create table app.source_table"),
+    );
+    const sourceViewIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create view app.source_view"),
+    );
+    const sourceMatViewIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create materialized view app.source_mat_view"),
     );
     const eventsTableIndex = orderedSql.findIndex((sql) =>
       sql.includes("create table app.events"),
@@ -2557,14 +2580,35 @@ describe("range type dependencies", () => {
       schema: "app",
       name: "row_type[]",
     });
+    expect(domainStatement?.provides).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "email[]",
+    });
     expect(sourceTableStatement?.provides).toContainEqual({
       kind: "type",
       schema: "app",
       name: "source_table[]",
     });
+    expect(sourceViewStatement?.provides).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "source_view[]",
+    });
+    expect(sourceMatViewStatement?.provides).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "source_mat_view[]",
+    });
     expect(compositeIndex).toBeGreaterThanOrEqual(0);
+    expect(domainIndex).toBeGreaterThan(compositeIndex);
     expect(sourceTableIndex).toBeGreaterThan(compositeIndex);
+    expect(sourceViewIndex).toBeGreaterThan(sourceTableIndex);
+    expect(sourceMatViewIndex).toBeGreaterThan(sourceTableIndex);
+    expect(eventsTableIndex).toBeGreaterThan(domainIndex);
     expect(eventsTableIndex).toBeGreaterThan(sourceTableIndex);
+    expect(eventsTableIndex).toBeGreaterThan(sourceViewIndex);
+    expect(eventsTableIndex).toBeGreaterThan(sourceMatViewIndex);
   }, 120000);
 
   test("orders canonical range functions through the shell type pattern", async () => {
@@ -2928,6 +2972,94 @@ describe("range type dependencies", () => {
     });
     expect(executionErrors).toHaveLength(0);
   }, 120000);
+
+  test("preserves local operator implementation functions with built-in names", async () => {
+    const result = await analyzeAndSort([
+      "create operator public.=== (function = texteq, leftarg = text, rightarg = text);",
+      "create function public.texteq(a text, b text) returns boolean language sql immutable strict as $$ select a operator(pg_catalog.=) b $$;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator public.==="),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const functionIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function public.texteq"),
+    );
+    const operatorIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator public.==="),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorStatement?.requires).toContainEqual(
+      expect.objectContaining({
+        kind: "function",
+        schema: "public",
+        name: "texteq",
+      }),
+    );
+    expect(functionIndex).toBeGreaterThanOrEqual(0);
+    expect(operatorIndex).toBeGreaterThan(functionIndex);
+  });
+
+  test("preserves local operator estimator functions with built-in names", async () => {
+    const result = await analyzeAndSort([
+      "create operator public.=== (function = texteq, leftarg = text, rightarg = text, restrict = eqsel);",
+      "create function public.eqsel(internal, oid, internal, integer) returns float8 language internal stable strict as 'eqsel';",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator public.==="),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const functionIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function public.eqsel"),
+    );
+    const operatorIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator public.==="),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorStatement?.requires).toContainEqual(
+      expect.objectContaining({
+        kind: "function",
+        schema: "public",
+        name: "eqsel",
+        signature: "(internal,oid,internal,int4)",
+      }),
+    );
+    expect(functionIndex).toBeGreaterThanOrEqual(0);
+    expect(operatorIndex).toBeGreaterThan(functionIndex);
+  });
+
+  test("reports missing default range subtype operator class providers", async () => {
+    const result = await analyzeAndSort([
+      "create type app.score_range as range (subtype = app.score);",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingDefaultOpclass = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.message.includes(
+          "default btree operator class provider found for range subtype 'app.score'",
+        ),
+    );
+
+    expect(missingDefaultOpclass?.objectRefs).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "score",
+    });
+  });
 
   test("matches typmod input functions with array argument providers", async () => {
     const result = await analyzeAndSort([

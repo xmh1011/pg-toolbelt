@@ -163,9 +163,17 @@ export const typeFromTypeNameNode = (
     typeNameRecord.arrayBounds.length > 0
   ) {
     const arrayName = `${typeRef.name}[]`;
-    const builtInArrayRef = createObjectRefFromAst("type", arrayName);
-    if (isBuiltInObjectRef(builtInArrayRef)) {
-      return builtInArrayRef;
+    const hasExplicitSchema = nameParts.length > 1;
+    const schema = typeRef.schema?.toLowerCase();
+    if (
+      !hasExplicitSchema ||
+      schema === "pg_catalog" ||
+      schema === "information_schema"
+    ) {
+      const builtInArrayRef = createObjectRefFromAst("type", arrayName);
+      if (isBuiltInObjectRef(builtInArrayRef)) {
+        return builtInArrayRef;
+      }
     }
 
     return createObjectRefFromAst("type", arrayName, typeRef.schema);

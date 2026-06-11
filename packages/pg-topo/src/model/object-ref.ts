@@ -64,6 +64,7 @@ const BUILTIN_TYPES = new Set([
   "time",
   "timestamp",
   "timestamptz",
+  "timetz",
   "tsquery",
   "tsmultirange",
   "tsrange",

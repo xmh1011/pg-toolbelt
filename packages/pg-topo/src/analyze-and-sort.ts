@@ -29,6 +29,7 @@ import type {
   Diagnostic,
   GraphEdge,
   GraphReport,
+  ObjectRef,
   StatementNode,
 } from "./model/types.ts";
 
@@ -81,12 +82,24 @@ const addImplicitRangeOperatorClassDependencies = (
   const extractionContext = createExtractionContext(
     parsedStatements.map((statement) => statement.ast),
   );
-  const hasExternalDefaultBtreeOperatorClass = (): boolean =>
-    externalProviders?.some(
-      (providerRef) =>
-        providerRef.kind === "operator_class" &&
-        signaturesCompatible("(btree)", providerRef.signature),
-    ) === true;
+  const hasExternalDefaultBtreeOperatorClass = (
+    subtypeRef: ObjectRef,
+  ): boolean => {
+    const subtypeSignature = subtypeRef.schema
+      ? `${subtypeRef.schema}.${subtypeRef.name}`
+      : subtypeRef.name;
+    return (
+      externalProviders?.some(
+        (providerRef) =>
+          providerRef.kind === "operator_class" &&
+          signaturesCompatible(
+            `(btree,${subtypeSignature})`,
+            providerRef.signature,
+            { requireExactArity: true },
+          ),
+      ) === true
+    );
+  };
 
   for (let index = 0; index < statementNodes.length; index += 1) {
     const statementNode = statementNodes[index];
@@ -128,7 +141,7 @@ const addImplicitRangeOperatorClassDependencies = (
 
     if (
       rangeOperatorClassRefs.size === 0 &&
-      !hasExternalDefaultBtreeOperatorClass() &&
+      !hasExternalDefaultBtreeOperatorClass(subtypeRef) &&
       !hasPgCatalogDefaultBtreeOperatorClassForSubtype(
         subtypeRef,
         extractionContext,

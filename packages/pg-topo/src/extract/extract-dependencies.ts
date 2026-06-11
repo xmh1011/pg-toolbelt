@@ -835,11 +835,14 @@ const builtInOperatorClassSupportFunctionNames = new Set([
 
 const isBuiltInOperatorClassSupportFunctionName = (
   nameParts: string[],
+  args: (ObjectRef | null)[],
 ): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
   return (
     nameParts.length === 1 &&
-    Boolean(name && builtInOperatorClassSupportFunctionNames.has(name))
+    Boolean(name && builtInOperatorClassSupportFunctionNames.has(name)) &&
+    args.length > 0 &&
+    args.every((argRef) => argRef !== null && isBuiltInObjectRef(argRef))
   );
 };
 
@@ -1187,7 +1190,12 @@ const extractCreateOperatorClassDependencies = (
     }
 
     if (item.itemtype === OPCLASS_ITEM_FUNCTION) {
-      if (isBuiltInOperatorClassSupportFunctionName(nameParts)) {
+      if (
+        isBuiltInOperatorClassSupportFunctionName(
+          nameParts,
+          objectWithArgsTypeRefs(itemName),
+        )
+      ) {
         continue;
       }
 

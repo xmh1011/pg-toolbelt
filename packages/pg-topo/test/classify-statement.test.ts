@@ -86,6 +86,19 @@ describe("classifyStatement", () => {
     ).toBe("CREATE_TYPE");
   });
 
+  test("returns CREATE_OPERATOR_CLASS for CreateOpClassStmt", () => {
+    expect(
+      classifyStatement({
+        CreateOpClassStmt: {
+          opclassname: [
+            { String: { sval: "app" } },
+            { String: { sval: "int4_range_ops" } },
+          ],
+        },
+      }),
+    ).toBe("CREATE_OPERATOR_CLASS");
+  });
+
   test("returns REVOKE when GrantStmt has is_grant false", () => {
     expect(
       classifyStatement({

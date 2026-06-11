@@ -49,6 +49,8 @@ export const objectKindFromObjType = (
       return "function";
     case "OBJECT_INDEX":
       return "index";
+    case "OBJECT_OPCLASS":
+      return "operator_class";
     case "OBJECT_LANGUAGE":
       return "language";
     case "OBJECT_MATVIEW":

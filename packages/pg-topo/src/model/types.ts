@@ -13,6 +13,7 @@ export const OBJECT_KINDS = [
   "table",
   "constraint",
   "index",
+  "operator_class",
   "function",
   "procedure",
   "aggregate",

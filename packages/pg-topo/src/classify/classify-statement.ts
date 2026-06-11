@@ -20,6 +20,7 @@ export type StatementClass =
   | "CREATE_TABLE"
   | "ALTER_TABLE"
   | "CREATE_INDEX"
+  | "CREATE_OPERATOR_CLASS"
   | "CREATE_FUNCTION"
   | "CREATE_PROCEDURE"
   | "CREATE_AGGREGATE"
@@ -57,6 +58,7 @@ const CLASS_BY_AST_NODE: Record<string, StatementClass> = {
   CreateFdwStmt: "CREATE_FOREIGN_DATA_WRAPPER",
   CreateForeignServerStmt: "CREATE_FOREIGN_SERVER",
   CreateFunctionStmt: "CREATE_FUNCTION",
+  CreateOpClassStmt: "CREATE_OPERATOR_CLASS",
   CreatePublicationStmt: "CREATE_PUBLICATION",
   CreateRoleStmt: "CREATE_ROLE",
   CreatePolicyStmt: "CREATE_POLICY",
@@ -155,6 +157,7 @@ const PHASE_BY_CLASS: Record<Exclude<StatementClass, "UNKNOWN">, PhaseTag> = {
   CREATE_FUNCTION: "routines",
   CREATE_AGGREGATE: "routines",
   CREATE_INDEX: "post_data",
+  CREATE_OPERATOR_CLASS: "pre_data",
   CREATE_LANGUAGE: "bootstrap",
   CREATE_MATERIALIZED_VIEW: "post_data",
   ALTER_PUBLICATION: "post_data",

@@ -770,6 +770,56 @@ const isBuiltInRangeCollationName = (nameParts: string[]): boolean => {
   return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
 };
 
+// Common pg_catalog btree operator classes that can be used as range
+// SUBTYPE_OPCLASS values without an input CREATE OPERATOR CLASS statement.
+const builtInRangeOperatorClassNames = new Set([
+  "array_ops",
+  "bit_ops",
+  "bool_ops",
+  "bpchar_ops",
+  "bytea_ops",
+  "char_ops",
+  "cidr_ops",
+  "date_ops",
+  "enum_ops",
+  "float4_ops",
+  "float8_ops",
+  "inet_ops",
+  "int2_ops",
+  "int4_ops",
+  "int8_ops",
+  "interval_ops",
+  "jsonb_ops",
+  "macaddr8_ops",
+  "macaddr_ops",
+  "money_ops",
+  "name_ops",
+  "numeric_ops",
+  "oid_ops",
+  "record_ops",
+  "text_ops",
+  "time_ops",
+  "timestamp_ops",
+  "timestamptz_ops",
+  "timetz_ops",
+  "uuid_ops",
+  "varbit_ops",
+  "varchar_ops",
+]);
+
+const isBuiltInRangeOperatorClassName = (nameParts: string[]): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name || !builtInRangeOperatorClassNames.has(name)) {
+    return false;
+  }
+
+  if (nameParts.length === 1) {
+    return true;
+  }
+
+  return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
+};
+
 const defaultMultirangeTypeName = (rangeTypeName: string): string =>
   rangeTypeName.includes("range")
     ? rangeTypeName.replace("range", "multirange")
@@ -837,6 +887,21 @@ const extractCreateRangeDependencies = (
       continue;
     }
 
+    if (optionName === "subtype_opclass") {
+      const operatorClassNameParts = extractNameParts(typeName?.names);
+      const operatorClassRef = objectFromNameParts(
+        "operator_class",
+        operatorClassNameParts,
+      );
+      if (
+        operatorClassRef &&
+        !isBuiltInRangeOperatorClassName(operatorClassNameParts)
+      ) {
+        requires.push(operatorClassRef);
+      }
+      continue;
+    }
+
     if (optionName === "multirange_type_name") {
       hasExplicitMultirangeTypeName = true;
       const multirangeRef = objectFromNameParts(
@@ -882,6 +947,37 @@ const extractCreateRangeDependencies = (
         rangeRef.schema,
       ),
     );
+  }
+
+  return { provides, requires };
+};
+
+const extractCreateOperatorClassDependencies = (
+  statementNode: Record<string, unknown>,
+): ExtractDependenciesResult => {
+  const provides: ObjectRef[] = [];
+  const requires: ObjectRef[] = [];
+
+  const operatorClassRef = objectFromNameParts(
+    "operator_class",
+    extractNameParts(statementNode.opclassname),
+  );
+  if (operatorClassRef) {
+    provides.push(
+      createObjectRefFromAst(
+        "operator_class",
+        operatorClassRef.name,
+        operatorClassRef.schema,
+      ),
+    );
+    if (operatorClassRef.schema) {
+      requires.push(createObjectRefFromAst("schema", operatorClassRef.schema));
+    }
+  }
+
+  const dataTypeRef = typeFromTypeNameNode(statementNode.datatype);
+  if (dataTypeRef) {
+    requires.push(dataTypeRef);
   }
 
   return { provides, requires };
@@ -1440,6 +1536,10 @@ const extractDependencyRefs = (
         requires: relationRef ? [relationRef] : [],
       };
     }
+    case "CREATE_OPERATOR_CLASS":
+      return extractCreateOperatorClassDependencies(
+        asRecord(astNode.CreateOpClassStmt) ?? {},
+      );
     case "CREATE_FUNCTION":
       return extractCreateFunctionDependencies(
         asRecord(astNode.CreateFunctionStmt) ?? {},

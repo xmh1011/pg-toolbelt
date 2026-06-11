@@ -636,7 +636,7 @@ describe("range type dependencies", () => {
     expect(operatorIndex).toBeGreaterThan(operatorFunctionIndex);
   }, 120000);
 
-  test("does not require producer statements for built-in operator implementation functions", async () => {
+  test("does not require producer statements for built-in text operator implementation functions", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = int4eq, leftarg = int4, rightarg = int4);",
       "create schema app;",
@@ -1276,7 +1276,8 @@ describe("range type dependencies", () => {
 
   test("does not require producer statements for built-in order-by operator families", async () => {
     const result = await analyzeAndSort([
-      "create operator class app.score_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by float_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
+      "create operator class app.score_float_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by float_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
+      "create operator class app.score_integer_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by integer_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
       "create operator <-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
       "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
       "create function app.score_union(internal, internal) returns app.score language internal immutable strict as 'gbt_int4_union';",
@@ -1292,17 +1293,28 @@ describe("range type dependencies", () => {
     const unresolvedCount = result.diagnostics.filter(
       (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
     ).length;
-    const operatorClassStatement = result.ordered.find((statement) =>
+    const floatOperatorClassStatement = result.ordered.find((statement) =>
       statement.sql
         .toLowerCase()
-        .includes("create operator class app.score_ops"),
+        .includes("create operator class app.score_float_ops"),
+    );
+    const integerOperatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_integer_ops"),
     );
 
     expect(unresolvedCount).toBe(0);
-    expect(operatorClassStatement?.requires).not.toContainEqual({
+    expect(floatOperatorClassStatement?.requires).not.toContainEqual({
       kind: "operator_family",
       schema: "public",
       name: "float_ops",
+      signature: "(btree)",
+    });
+    expect(integerOperatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator_family",
+      schema: "public",
+      name: "integer_ops",
       signature: "(btree)",
     });
   });
@@ -2105,6 +2117,69 @@ describe("range type dependencies", () => {
       schema: "app",
       name: "score_out",
       signature: "(app.score)",
+    });
+  });
+
+  test("does not require producer statements for built-in operator implementation functions", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.=== (function = texteq, leftarg = text, rightarg = text);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.==="),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "texteq",
+      signature: "(text,text)",
+    });
+    expect(executionErrors).toHaveLength(0);
+  }, 120000);
+
+  test("matches typmod input functions with array argument providers", async () => {
+    const result = await analyzeAndSort([
+      "create type app.widget (input = app.widget_in, output = app.widget_out, typmod_in = app.widget_typmod_in, typmod_out = app.widget_typmod_out, internallength = 4, alignment = int4);",
+      "create function app.widget_typmod_out(value int4) returns cstring language sql immutable strict as $$ select $1::text::cstring $$;",
+      "create function app.widget_typmod_in(value cstring[]) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create function app.widget_out(value app.widget) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.widget_in(value cstring) returns app.widget language internal immutable strict as 'int4in';",
+      "create type app.widget;",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const baseTypeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.widget ("),
+    );
+    const typmodFunctionStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create function app.widget_typmod_in"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(baseTypeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "widget_typmod_in",
+      signature: "(cstring[])",
+    });
+    expect(typmodFunctionStatement?.provides).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "widget_typmod_in",
+      signature: "(cstring[])",
     });
   });
 });

@@ -124,6 +124,44 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
 
+  test("orders explicitly qualified public range collations before the range type", async () => {
+    const result = await analyzeAndSort([
+      "create table app.labels(id int primary key, value_span app.label_range not null);",
+      'create type app.label_range as range (subtype = text, collation = public."C");',
+      'create collation public."C" from pg_catalog."C";',
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const schemaIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create schema app"),
+    );
+    const collationIndex = orderedSql.findIndex((sql) =>
+      sql.includes('create collation public."c"'),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.label_range"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.labels"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(schemaIndex).toBeGreaterThanOrEqual(0);
+    expect(collationIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(collationIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
+
   test("provides explicit multirange type names", async () => {
     const result = await analyzeAndSort([
       "create table app.labels(id int primary key, spans app.label_multirange not null);",
@@ -338,5 +376,45 @@ describe("range type dependencies", () => {
     expect(baseTypeIndex).toBeGreaterThan(inputFunctionIndex);
     expect(baseTypeIndex).toBeGreaterThan(outputFunctionIndex);
     expect(tableIndex).toBeGreaterThan(baseTypeIndex);
+  }, 120000);
+
+  test("orders base types after types referenced by LIKE", async () => {
+    const result = await analyzeAndSort([
+      "create table app.items(id int primary key, value app.child_widget not null);",
+      "create type app.child_widget (input = app.child_widget_in, output = app.child_widget_out, like = app.parent_widget);",
+      "create function app.child_widget_out(value app.child_widget) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.child_widget_in(value cstring) returns app.child_widget language internal immutable strict as 'int4in';",
+      "create type app.child_widget;",
+      "create type app.parent_widget (input = app.parent_widget_in, output = app.parent_widget_out, internallength = 4, passedbyvalue, alignment = int4);",
+      "create function app.parent_widget_out(value app.parent_widget) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.parent_widget_in(value cstring) returns app.parent_widget language internal immutable strict as 'int4in';",
+      "create type app.parent_widget;",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const parentBaseTypeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.parent_widget ("),
+    );
+    const childBaseTypeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.child_widget ("),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.items"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(parentBaseTypeIndex).toBeGreaterThanOrEqual(0);
+    expect(childBaseTypeIndex).toBeGreaterThan(parentBaseTypeIndex);
+    expect(tableIndex).toBeGreaterThan(childBaseTypeIndex);
   }, 120000);
 });

@@ -764,6 +764,37 @@ const extractCreateRangeDependencies = (
       continue;
     }
 
+    if (optionName === "collation") {
+      const collationRef = objectFromNameParts(
+        "collation",
+        extractNameParts(typeName?.names),
+      );
+      if (collationRef) {
+        requires.push(collationRef);
+      }
+      continue;
+    }
+
+    if (optionName === "multirange_type_name") {
+      const multirangeRef = objectFromNameParts(
+        "type",
+        extractNameParts(typeName?.names),
+      );
+      if (multirangeRef) {
+        provides.push(
+          createObjectRefFromAst(
+            "type",
+            multirangeRef.name,
+            multirangeRef.schema,
+          ),
+        );
+        if (multirangeRef.schema) {
+          requires.push(createObjectRefFromAst("schema", multirangeRef.schema));
+        }
+      }
+      continue;
+    }
+
     if (rangeFunctionOptionNames.has(optionName)) {
       const functionRef = objectFromNameParts(
         "function",

@@ -88,18 +88,38 @@ describe("range type dependencies", () => {
   }, 120000);
 
   test("does not require producer statements for built-in range collations", async () => {
+    const cases = [
+      {
+        collationSql: '"default"',
+        typeName: "default_label_range",
+        tableName: "default_labels",
+      },
+      {
+        collationSql: "ucs_basic",
+        typeName: "ucs_basic_label_range",
+        tableName: "ucs_basic_labels",
+      },
+      { collationSql: '"C"', typeName: "label_range", tableName: "labels" },
+    ];
+
     const result = await analyzeAndSort([
-      "create table app.labels(id int primary key, value_span app.label_range not null);",
-      'create type app.label_range as range (subtype = text, collation = "C");',
+      ...cases.flatMap((testCase) => [
+        `create table app.${testCase.tableName}(id int primary key, value_span app.${testCase.typeName} not null);`,
+        `create type app.${testCase.typeName} as range (subtype = text, collation = ${testCase.collationSql});`,
+      ]),
       "create schema app;",
     ]);
-    const validation = await validateAnalyzeResultWithPostgres(result);
     const unknownCount = result.diagnostics.filter(
       (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
     ).length;
     const unresolvedCount = result.diagnostics.filter(
       (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
     ).length;
+
+    expect(unknownCount).toBe(0);
+    expect(unresolvedCount).toBe(0);
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
     const executionErrors = validation.diagnostics.filter(
       (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
     );
@@ -109,19 +129,21 @@ describe("range type dependencies", () => {
     const schemaIndex = orderedSql.findIndex((sql) =>
       sql.includes("create schema app"),
     );
-    const rangeIndex = orderedSql.findIndex((sql) =>
-      sql.includes("create type app.label_range"),
-    );
-    const tableIndex = orderedSql.findIndex((sql) =>
-      sql.includes("create table app.labels"),
-    );
 
-    expect(unknownCount).toBe(0);
-    expect(unresolvedCount).toBe(0);
     expect(executionErrors).toHaveLength(0);
     expect(schemaIndex).toBeGreaterThanOrEqual(0);
-    expect(rangeIndex).toBeGreaterThan(schemaIndex);
-    expect(tableIndex).toBeGreaterThan(rangeIndex);
+
+    for (const testCase of cases) {
+      const rangeIndex = orderedSql.findIndex((sql) =>
+        sql.includes(`create type app.${testCase.typeName}`),
+      );
+      const tableIndex = orderedSql.findIndex((sql) =>
+        sql.includes(`create table app.${testCase.tableName}`),
+      );
+
+      expect(rangeIndex).toBeGreaterThan(schemaIndex);
+      expect(tableIndex).toBeGreaterThan(rangeIndex);
+    }
   }, 120000);
 
   test("orders explicitly qualified public range collations before the range type", async () => {

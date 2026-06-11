@@ -915,6 +915,58 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
 
+  test("orders operator classes after operator families used for ordering", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by app.score_sort_family, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
+      "create operator family app.score_sort_family using btree;",
+      "create operator <-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
+      "create function app.score_union(internal, internal) returns app.score language internal immutable strict as 'gbt_int4_union';",
+      "create function app.score_compress(internal) returns internal language internal immutable strict as 'gbt_int4_compress';",
+      "create function app.score_decompress(internal) returns internal language internal immutable strict as 'gbt_int4_decompress';",
+      "create function app.score_penalty(internal, internal, internal) returns internal language internal immutable strict as 'gbt_int4_penalty';",
+      "create function app.score_picksplit(internal, internal) returns internal language internal immutable strict as 'gbt_int4_picksplit';",
+      "create function app.score_same(app.score, app.score, internal) returns internal language internal immutable strict as 'gbt_int4_same';",
+      "create function app.score_distance(a app.score, b app.score) returns float8 language sql immutable strict as $$ select abs((a).value - (b).value)::float8 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "operator_family",
+      schema: "app",
+      name: "score_sort_family",
+      signature: "(btree)",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const familyIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator family app.score_sort_family"),
+    );
+    const operatorClassIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator class app.score_ops"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(familyIndex).toBeGreaterThanOrEqual(0);
+    expect(operatorClassIndex).toBeGreaterThan(familyIndex);
+  }, 120000);
+
   test("provides implicit operator families from operator classes", async () => {
     const result = await analyzeAndSort([
       "create operator class app.text_score_ops for type text using btree family app.score_ops as operator 1 < (text, text), operator 2 <= (text, text), operator 3 = (text, text), operator 4 >= (text, text), operator 5 > (text, text), function 1 bttextcmp(text, text);",
@@ -980,6 +1032,45 @@ describe("range type dependencies", () => {
     expect(consumerIndex).toBeGreaterThan(providerIndex);
   }, 120000);
 
+  test("uses opclass datatypes for omitted operator item arguments", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using btree as operator 1 app.<, function 1 app.score_cmp(app.score, app.score);",
+      "create operator app.< (function = app.score_prefix, rightarg = app.score);",
+      "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select case when (a).value < (b).value then -1 when (a).value > (b).value then 1 else 0 end $$;",
+      "create function app.score_prefix(value app.score) returns bool language sql immutable strict as $$ select (value).value < 0 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolvedOperatorDependency = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<",
+        ) === true,
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "operator",
+      schema: "app",
+      name: "<",
+      signature: "(app.score,app.score)",
+    });
+    expect(unresolvedOperatorDependency?.objectRefs).toContainEqual({
+      kind: "operator",
+      schema: "app",
+      name: "<",
+      signature: "(app.score,app.score)",
+    });
+  }, 120000);
+
   test("records operator class storage type dependencies", async () => {
     const result = await analyzeAndSort([
       "create operator class app.score_ops for type app.score using btree as storage app.score_storage, operator 1 < (app.score, app.score), operator 2 <= (app.score, app.score), operator 3 = (app.score, app.score), operator 4 >= (app.score, app.score), operator 5 > (app.score, app.score), function 1 app.score_cmp(app.score, app.score);",
@@ -1013,6 +1104,60 @@ describe("range type dependencies", () => {
       schema: "app",
       name: "score_storage",
     });
+  }, 120000);
+
+  test("orders operator classes after support function op types", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using btree as operator 1 < (app.score, app.score), operator 2 <= (app.score, app.score), operator 3 = (app.score, app.score), operator 4 >= (app.score, app.score), operator 5 > (app.score, app.score), function 1 app.score_cmp(app.score, app.score), function 2 (app.other, app.other) app.score_sortsupport(internal);",
+      "create function app.score_sortsupport(internal) returns void language internal immutable strict as 'btint4sortsupport';",
+      "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select case when (a).value < (b).value then -1 when (a).value > (b).value then 1 else 0 end $$;",
+      "create operator > (function = app.score_gt, leftarg = app.score, rightarg = app.score);",
+      "create operator >= (function = app.score_gte, leftarg = app.score, rightarg = app.score);",
+      "create operator = (function = app.score_eq, leftarg = app.score, rightarg = app.score);",
+      "create operator <= (function = app.score_lte, leftarg = app.score, rightarg = app.score);",
+      "create operator < (function = app.score_lt, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_gt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value > (b).value $$;",
+      "create function app.score_gte(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value >= (b).value $$;",
+      "create function app.score_eq(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value = (b).value $$;",
+      "create function app.score_lte(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value <= (b).value $$;",
+      "create function app.score_lt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value < (b).value $$;",
+      "create type app.other as (value int4);",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "other",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const opTypeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.other"),
+    );
+    const operatorClassIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator class app.score_ops"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(opTypeIndex).toBeGreaterThanOrEqual(0);
+    expect(operatorClassIndex).toBeGreaterThan(opTypeIndex);
   }, 120000);
 
   test("does not require producer statements for built-in range operator classes", async () => {

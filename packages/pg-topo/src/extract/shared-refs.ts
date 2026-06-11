@@ -1,4 +1,8 @@
-import { createObjectRefFromAst, DEFAULT_SCHEMA } from "../model/object-ref.ts";
+import {
+  createObjectRefFromAst,
+  DEFAULT_SCHEMA,
+  isBuiltInObjectRef,
+} from "../model/object-ref.ts";
 import type { ObjectRef } from "../model/types.ts";
 import { asRecord } from "../utils/ast.ts";
 
@@ -152,7 +156,21 @@ export const typeFromTypeNameNode = (
     return null;
   }
   const nameParts = extractNameParts(typeNameRecord.names);
-  return objectFromNameParts("type", nameParts, undefined);
+  const typeRef = objectFromNameParts("type", nameParts, undefined);
+  if (
+    typeRef &&
+    Array.isArray(typeNameRecord.arrayBounds) &&
+    typeNameRecord.arrayBounds.length > 0
+  ) {
+    const builtInArrayRef = createObjectRefFromAst(
+      "type",
+      `${typeRef.name}${"[]".repeat(typeNameRecord.arrayBounds.length)}`,
+    );
+    if (isBuiltInObjectRef(builtInArrayRef)) {
+      return builtInArrayRef;
+    }
+  }
+  return typeRef;
 };
 
 export const relationFromRangeVarNode = (

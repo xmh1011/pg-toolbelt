@@ -895,7 +895,10 @@ const isBuiltInRangeOperatorClassName = (
 
 const builtInBtreeOperatorFamilyNames = new Set([
   ...builtInRangeOperatorClassNames,
+  "datetime_ops",
   "float_ops",
+  "integer_ops",
+  "network_ops",
 ]);
 
 const isBuiltInBtreeOperatorFamilyName = (nameParts: string[]): boolean => {
@@ -1430,6 +1433,12 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   string,
   string[][]
 >([
+  ["booleq", [["bool", "bool"]]],
+  ["boolge", [["bool", "bool"]]],
+  ["boolgt", [["bool", "bool"]]],
+  ["boolle", [["bool", "bool"]]],
+  ["boollt", [["bool", "bool"]]],
+  ["boolne", [["bool", "bool"]]],
   ["int2eq", [["int2", "int2"]]],
   ["int2ge", [["int2", "int2"]]],
   ["int2gt", [["int2", "int2"]]],
@@ -1448,6 +1457,24 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int8le", [["int8", "int8"]]],
   ["int8lt", [["int8", "int8"]]],
   ["int8ne", [["int8", "int8"]]],
+  ["numeric_eq", [["numeric", "numeric"]]],
+  ["numeric_ge", [["numeric", "numeric"]]],
+  ["numeric_gt", [["numeric", "numeric"]]],
+  ["numeric_le", [["numeric", "numeric"]]],
+  ["numeric_lt", [["numeric", "numeric"]]],
+  ["numeric_ne", [["numeric", "numeric"]]],
+  ["texteq", [["text", "text"]]],
+  ["text_ge", [["text", "text"]]],
+  ["text_gt", [["text", "text"]]],
+  ["text_le", [["text", "text"]]],
+  ["text_lt", [["text", "text"]]],
+  ["textne", [["text", "text"]]],
+  ["uuid_eq", [["uuid", "uuid"]]],
+  ["uuid_ge", [["uuid", "uuid"]]],
+  ["uuid_gt", [["uuid", "uuid"]]],
+  ["uuid_le", [["uuid", "uuid"]]],
+  ["uuid_lt", [["uuid", "uuid"]]],
+  ["uuid_ne", [["uuid", "uuid"]]],
 ]);
 
 const operatorEstimatorFunctionArgs = (

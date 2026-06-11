@@ -727,6 +727,24 @@ const extractCreateCollationDependencies = (
 
 const rangeFunctionOptionNames = new Set(["canonical", "subtype_diff"]);
 
+// PostgreSQL documents float8mi as the built-in subtype_diff helper for
+// custom float ranges. Other unqualified support functions remain dependencies
+// so custom routines still order before the range type that uses them.
+const builtInRangeSupportFunctionNames = new Set(["float8mi"]);
+
+const isBuiltInRangeSupportFunctionName = (nameParts: string[]): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name || !builtInRangeSupportFunctionNames.has(name)) {
+    return false;
+  }
+
+  if (nameParts.length === 1) {
+    return true;
+  }
+
+  return nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
+};
+
 // PostgreSQL standard/predefined collations live in pg_catalog. User collations
 // with the same name still need a dependency when explicitly schema-qualified.
 const builtInRangeCollationNames = new Set([
@@ -841,10 +859,12 @@ const extractCreateRangeDependencies = (
     }
 
     if (rangeFunctionOptionNames.has(optionName)) {
-      const functionRef = objectFromNameParts(
-        "function",
-        extractNameParts(typeName?.names),
-      );
+      const functionNameParts = extractNameParts(typeName?.names);
+      if (isBuiltInRangeSupportFunctionName(functionNameParts)) {
+        continue;
+      }
+
+      const functionRef = objectFromNameParts("function", functionNameParts);
       if (functionRef) {
         requires.push(functionRef);
       }

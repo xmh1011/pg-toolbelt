@@ -1,26 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { analyzeAndSort } from "../src/analyze-and-sort";
+import { objectRefKey } from "../src/model/object-ref";
 import { validateAnalyzeResultWithPostgres } from "./support/postgres-validation";
-
-const seededRandom = (seed: number): (() => number) => {
-  let state = seed >>> 0;
-  return () => {
-    state = (state * 1664525 + 1013904223) >>> 0;
-    return state / 4294967296;
-  };
-};
-
-const shuffleDeterministic = <T>(items: T[], seed: number): T[] => {
-  const random = seededRandom(seed);
-  const cloned = [...items];
-  for (let index = cloned.length - 1; index > 0; index -= 1) {
-    const randomIndex = Math.floor(random() * (index + 1));
-    const current = cloned[index];
-    cloned[index] = cloned[randomIndex] as T;
-    cloned[randomIndex] = current as T;
-  }
-  return cloned;
-};
+import { shuffleDeterministic } from "./support/shuffle";
 
 const baseStatements = [
   "create schema app;",
@@ -51,6 +33,22 @@ const assertAlterTableWaitsForExpressionFunction = async (
   expect(functionIndex).toBeGreaterThanOrEqual(0);
   expect(alterTableIndex).toBeGreaterThanOrEqual(0);
   expect(functionIndex).toBeLessThan(alterTableIndex);
+};
+
+const assertAlterTableRequires = async (
+  statements: string[],
+  alterSqlNeedle: string,
+  requiredObjectKeys: string[],
+): Promise<void> => {
+  const result = await analyzeAndSort(statements);
+  const alterStatement = result.ordered.find((statement) =>
+    statement.sql.toLowerCase().includes(alterSqlNeedle),
+  );
+
+  expect(alterStatement).toBeDefined();
+  expect(alterStatement?.requires.map(objectRefKey).sort()).toEqual(
+    expect.arrayContaining(requiredObjectKeys),
+  );
 };
 
 describe("ALTER TABLE expression dependencies", () => {
@@ -140,4 +138,30 @@ describe("ALTER TABLE expression dependencies", () => {
       "alter column amount type text using",
     );
   }, 120000);
+
+  test("ADD COLUMN records the referenced type dependency", async () => {
+    await assertAlterTableRequires(
+      [
+        "create schema app;",
+        "create table app.items(id int primary key);",
+        "alter table app.items add column payload app.payload;",
+        "create type app.payload as enum ('created', 'updated');",
+      ],
+      "add column payload app.payload",
+      ["type:app:payload:"],
+    );
+  });
+
+  test("ADD COLUMN records column-level foreign key dependencies", async () => {
+    await assertAlterTableRequires(
+      [
+        "create schema app;",
+        "create table app.items(id int primary key);",
+        "alter table app.items add column customer_id int references app.customers(id);",
+        "create table app.customers(id int primary key);",
+      ],
+      "add column customer_id int references app.customers",
+      ["table:app:customers:", "constraint:app:customers:(id)"],
+    );
+  });
 });

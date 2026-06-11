@@ -1498,6 +1498,55 @@ describe("range type dependencies", () => {
     expect(operatorClassIndex).toBeGreaterThan(opTypeIndex);
   }, 120000);
 
+  test("does not require producer statements for pg_catalog opclass support functions", async () => {
+    const result = await analyzeAndSort([
+      "create table app.measurements(id int primary key, value_span app.uuid_range not null);",
+      "create type app.uuid_range as range (subtype = uuid, subtype_opclass = app.uuid_range_ops);",
+      "create operator class app.uuid_range_ops for type uuid using btree as operator 1 < (uuid, uuid), operator 2 <= (uuid, uuid), operator 3 = (uuid, uuid), operator 4 >= (uuid, uuid), operator 5 > (uuid, uuid), function 1 uuid_cmp(uuid, uuid);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.uuid_range_ops"),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const schemaIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create schema app"),
+    );
+    const operatorClassIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator class app.uuid_range_ops"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.uuid_range"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.measurements"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "uuid_cmp",
+      signature: "(uuid,uuid)",
+    });
+    expect(executionErrors).toHaveLength(0);
+    expect(schemaIndex).toBeGreaterThanOrEqual(0);
+    expect(operatorClassIndex).toBeGreaterThan(schemaIndex);
+    expect(rangeIndex).toBeGreaterThan(operatorClassIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
+
   test("does not require producer statements for built-in range operator classes", async () => {
     const result = await analyzeAndSort([
       "create table app.measurements(id int primary key, value_span app.int4_range not null);",

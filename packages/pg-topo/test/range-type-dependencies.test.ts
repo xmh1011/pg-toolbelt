@@ -523,11 +523,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_sel",
+      signature: "(internal,oid,internal,int4)",
     });
     expect(operatorStatement?.requires).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_join",
+      signature: "(internal,oid,internal,int2,internal)",
     });
 
     const validation = await validateAnalyzeResultWithPostgres(result);
@@ -562,6 +564,37 @@ describe("range type dependencies", () => {
     expect(operatorIndex).toBeGreaterThan(restrictFunctionIndex);
     expect(operatorIndex).toBeGreaterThan(joinFunctionIndex);
   }, 120000);
+
+  test("requires operator estimator functions with PostgreSQL signatures", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<# (function = app.score_lt, leftarg = app.score, rightarg = app.score, restrict = app.score_sel, join = app.score_join);",
+      "create function app.score_join(value int4) returns float8 language sql immutable strict as $$ select value::float8 $$;",
+      "create function app.score_sel(value int4) returns float8 language sql immutable strict as $$ select value::float8 $$;",
+      "create function app.score_lt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value < (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<#"),
+    );
+
+    expect(unresolved).toHaveLength(2);
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_sel",
+      signature: "(internal,oid,internal,int4)",
+    });
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_join",
+      signature: "(internal,oid,internal,int2,internal)",
+    });
+  });
 
   test("does not require producer statements for built-in operator estimators", async () => {
     const result = await analyzeAndSort([
@@ -640,6 +673,34 @@ describe("range type dependencies", () => {
     expect(executionErrors).toHaveLength(0);
     expect(schemaIndex).toBeGreaterThanOrEqual(0);
     expect(operatorIndex).toBeGreaterThan(schemaIndex);
+  }, 120000);
+
+  test("does not require producer statements for non-equality built-in operator implementation functions", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<< (function = int4lt, leftarg = int4, rightarg = int4);",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<<"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(operatorStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "int4lt",
+      signature: "(int4,int4)",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+
+    expect(executionErrors).toHaveLength(0);
   }, 120000);
 
   test("distinguishes prefix and postfix operator signatures", async () => {
@@ -992,6 +1053,63 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
 
+  test("orders custom range types after any default subtype operator class name", async () => {
+    const result = await analyzeAndSort([
+      "create table app.measurements(id int primary key, value_span app.score_range not null);",
+      "create type app.score_range as range (subtype = app.score);",
+      "create operator class app.my_score_default default for type app.score using btree as operator 1 < (app.score, app.score), operator 2 <= (app.score, app.score), operator 3 = (app.score, app.score), operator 4 >= (app.score, app.score), operator 5 > (app.score, app.score), function 1 app.score_cmp(app.score, app.score);",
+      "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select case when (a).value < (b).value then -1 when (a).value > (b).value then 1 else 0 end $$;",
+      "create operator > (function = app.score_gt, leftarg = app.score, rightarg = app.score);",
+      "create operator >= (function = app.score_gte, leftarg = app.score, rightarg = app.score);",
+      "create operator = (function = app.score_eq, leftarg = app.score, rightarg = app.score);",
+      "create operator <= (function = app.score_lte, leftarg = app.score, rightarg = app.score);",
+      "create operator < (function = app.score_lt, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_gt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value > (b).value $$;",
+      "create function app.score_gte(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value >= (b).value $$;",
+      "create function app.score_eq(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value = (b).value $$;",
+      "create function app.score_lte(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value <= (b).value $$;",
+      "create function app.score_lt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value < (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.score_range"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "operator_class",
+      schema: "app",
+      name: "my_score_default",
+      signature: "(btree)",
+    });
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const operatorClassIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator class app.my_score_default"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.score_range"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.measurements"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(operatorClassIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(operatorClassIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  }, 120000);
+
   test("does not require producer statements for built-in opclass operators without argument lists", async () => {
     const result = await analyzeAndSort([
       "create table app.measurements(id int primary key, value_span app.custom_int4_range not null);",
@@ -1155,6 +1273,39 @@ describe("range type dependencies", () => {
     expect(familyIndex).toBeGreaterThanOrEqual(0);
     expect(operatorClassIndex).toBeGreaterThan(familyIndex);
   }, 120000);
+
+  test("does not require producer statements for built-in order-by operator families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by float_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
+      "create operator <-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
+      "create function app.score_union(internal, internal) returns app.score language internal immutable strict as 'gbt_int4_union';",
+      "create function app.score_compress(internal) returns internal language internal immutable strict as 'gbt_int4_compress';",
+      "create function app.score_decompress(internal) returns internal language internal immutable strict as 'gbt_int4_decompress';",
+      "create function app.score_penalty(internal, internal, internal) returns internal language internal immutable strict as 'gbt_int4_penalty';",
+      "create function app.score_picksplit(internal, internal) returns internal language internal immutable strict as 'gbt_int4_picksplit';",
+      "create function app.score_same(app.score, app.score, internal) returns internal language internal immutable strict as 'gbt_int4_same';",
+      "create function app.score_distance(a app.score, b app.score) returns float8 language sql immutable strict as $$ select abs((a).value - (b).value)::float8 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolvedCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    ).length;
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+
+    expect(unresolvedCount).toBe(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator_family",
+      schema: "public",
+      name: "float_ops",
+      signature: "(btree)",
+    });
+  });
 
   test("provides implicit operator families from operator classes", async () => {
     const result = await analyzeAndSort([
@@ -1877,4 +2028,34 @@ describe("range type dependencies", () => {
     expect(elementTypeIndex).toBeGreaterThanOrEqual(0);
     expect(baseTypeIndex).toBeGreaterThan(elementTypeIndex);
   }, 120000);
+
+  test("requires base type support functions with PostgreSQL signatures", async () => {
+    const result = await analyzeAndSort([
+      "create type app.score (input = app.score_in, output = app.score_out, internallength = 4, alignment = int4);",
+      "create function app.score_out(value app.score) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.score_in(value int4) returns app.score language sql immutable strict as $$ select null::app.score $$;",
+      "create type app.score;",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const baseTypeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.score ("),
+    );
+
+    expect(unresolved).toHaveLength(1);
+    expect(baseTypeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_in",
+      signature: "(cstring)",
+    });
+    expect(baseTypeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "score_out",
+      signature: "(app.score)",
+    });
+  });
 });

@@ -727,6 +727,11 @@ const extractCreateCollationDependencies = (
 
 const rangeFunctionOptionNames = new Set(["canonical", "subtype_diff"]);
 
+const defaultMultirangeTypeName = (rangeTypeName: string): string =>
+  rangeTypeName.endsWith("range")
+    ? `${rangeTypeName.slice(0, -"range".length)}multirange`
+    : `${rangeTypeName}_multirange`;
+
 const baseTypeFunctionOptionNames = new Set([
   "input",
   "output",
@@ -760,6 +765,8 @@ const extractCreateRangeDependencies = (
   const params = Array.isArray(statementNode.params)
     ? statementNode.params
     : [];
+  let hasExplicitMultirangeTypeName = false;
+
   for (const paramNode of params) {
     const defElem = asRecord(asRecord(paramNode)?.DefElem);
     if (!defElem || typeof defElem.defname !== "string") {
@@ -788,6 +795,7 @@ const extractCreateRangeDependencies = (
     }
 
     if (optionName === "multirange_type_name") {
+      hasExplicitMultirangeTypeName = true;
       const multirangeRef = objectFromNameParts(
         "type",
         extractNameParts(typeName?.names),
@@ -816,6 +824,19 @@ const extractCreateRangeDependencies = (
         requires.push(functionRef);
       }
     }
+  }
+
+  if (rangeRef && !hasExplicitMultirangeTypeName) {
+    // PostgreSQL creates a default multirange type alongside every range type.
+    // The name is derived from the range type unless MULTIRANGE_TYPE_NAME is
+    // present, in which case the explicit option above is the only provider.
+    provides.push(
+      createObjectRefFromAst(
+        "type",
+        defaultMultirangeTypeName(rangeRef.name),
+        rangeRef.schema,
+      ),
+    );
   }
 
   return { provides, requires };

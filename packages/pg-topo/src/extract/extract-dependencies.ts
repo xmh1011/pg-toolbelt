@@ -912,12 +912,22 @@ const isBuiltInBtreeOperatorFamilyName = (nameParts: string[]): boolean => {
 };
 
 // Opclass items commonly reference pg_catalog support objects without schema
-// qualification. Keep those out of dependency resolution while still requiring
-// user-defined unqualified support items such as <# or app.cmp(...).
+// qualification. Keep PostgreSQL's built-in btree support routines out of
+// dependency resolution while still requiring user-defined unqualified support
+// items such as <# or app.cmp(...).
 const builtInOperatorClassSupportFunctionSignatures = new Map<
   string,
   string[][]
 >([
+  ["bitcmp", [["bit", "bit"]]],
+  ["bpchar_sortsupport", [["internal"]]],
+  ["bpcharcmp", [["bpchar", "bpchar"]]],
+  ["btarraycmp", [["anyarray", "anyarray"]]],
+  ["btboolcmp", [["bool", "bool"]]],
+  ["btbpchar_pattern_cmp", [["bpchar", "bpchar"]]],
+  ["btbpchar_pattern_sortsupport", [["internal"]]],
+  ["btcharcmp", [["char", "char"]]],
+  ["btequalimage", [["oid"]]],
   ["btfloat4cmp", [["float4", "float4"]]],
   ["btfloat4sortsupport", [["internal"]]],
   ["btfloat8cmp", [["float8", "float8"]]],
@@ -928,8 +938,59 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["btint4sortsupport", [["internal"]]],
   ["btint8cmp", [["int8", "int8"]]],
   ["btint8sortsupport", [["internal"]]],
+  ["btnamecmp", [["name", "name"]]],
+  ["btnamesortsupport", [["internal"]]],
+  ["btoidcmp", [["oid", "oid"]]],
+  ["btoidsortsupport", [["internal"]]],
+  ["btoidvectorcmp", [["oidvector", "oidvector"]]],
+  ["btrecordcmp", [["record", "record"]]],
+  ["btrecordimagecmp", [["record", "record"]]],
+  ["bttext_pattern_cmp", [["text", "text"]]],
+  ["bttext_pattern_sortsupport", [["internal"]]],
   ["bttextcmp", [["text", "text"]]],
   ["bttextsortsupport", [["internal"]]],
+  ["bttidcmp", [["tid", "tid"]]],
+  ["btvarstrequalimage", [["oid"]]],
+  ["bytea_sortsupport", [["internal"]]],
+  ["byteacmp", [["bytea", "bytea"]]],
+  ["cash_cmp", [["money", "money"]]],
+  ["date_cmp", [["date", "date"]]],
+  ["date_sortsupport", [["internal"]]],
+  ["enum_cmp", [["anyenum", "anyenum"]]],
+  [
+    "in_range",
+    [
+      ["float8", "float8", "float8", "bool", "bool"],
+      ["int2", "int2", "int2", "bool", "bool"],
+      ["int4", "int4", "int4", "bool", "bool"],
+      ["int8", "int8", "int8", "bool", "bool"],
+      ["interval", "interval", "interval", "bool", "bool"],
+      ["numeric", "numeric", "numeric", "bool", "bool"],
+    ],
+  ],
+  ["interval_cmp", [["interval", "interval"]]],
+  ["jsonb_cmp", [["jsonb", "jsonb"]]],
+  ["macaddr8_cmp", [["macaddr8", "macaddr8"]]],
+  ["macaddr_cmp", [["macaddr", "macaddr"]]],
+  ["macaddr_sortsupport", [["internal"]]],
+  ["multirange_cmp", [["anymultirange", "anymultirange"]]],
+  ["network_cmp", [["inet", "inet"]]],
+  ["network_sortsupport", [["internal"]]],
+  ["numeric_cmp", [["numeric", "numeric"]]],
+  ["numeric_sortsupport", [["internal"]]],
+  ["pg_lsn_cmp", [["pg_lsn", "pg_lsn"]]],
+  ["range_cmp", [["anyrange", "anyrange"]]],
+  ["time_cmp", [["time", "time"]]],
+  ["timestamp_cmp", [["timestamp", "timestamp"]]],
+  ["timestamp_sortsupport", [["internal"]]],
+  ["timestamptz_cmp", [["timestamptz", "timestamptz"]]],
+  ["timetz_cmp", [["timetz", "timetz"]]],
+  ["tsquery_cmp", [["tsquery", "tsquery"]]],
+  ["tsvector_cmp", [["tsvector", "tsvector"]]],
+  ["uuid_cmp", [["uuid", "uuid"]]],
+  ["uuid_sortsupport", [["internal"]]],
+  ["varbitcmp", [["varbit", "varbit"]]],
+  ["xid8cmp", [["xid8", "xid8"]]],
 ]);
 
 const isBuiltInOperatorClassSupportFunctionName = (

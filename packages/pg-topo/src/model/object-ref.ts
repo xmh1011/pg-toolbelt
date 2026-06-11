@@ -5,6 +5,9 @@ const BUILTIN_TYPES = new Set([
   "any",
   "anyarray",
   "anyelement",
+  "anyenum",
+  "anymultirange",
+  "anyrange",
   "bool",
   "box",
   "bpchar",
@@ -37,7 +40,9 @@ const BUILTIN_TYPES = new Set([
   "numeric",
   "numrange",
   "oid",
+  "oidvector",
   "path",
+  "pg_lsn",
   "point",
   "polygon",
   "record",
@@ -60,6 +65,7 @@ const BUILTIN_TYPES = new Set([
   "tstzrange",
   "tsvector",
   "trigger",
+  "tid",
   "unknown",
   "uuid",
   "varchar",
@@ -67,6 +73,7 @@ const BUILTIN_TYPES = new Set([
   "bit",
   "void",
   "xml",
+  "xid8",
 ]);
 
 export const DEFAULT_SCHEMA = "public";

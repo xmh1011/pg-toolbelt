@@ -91,6 +91,32 @@ describe("ALTER TABLE expression dependencies", () => {
     );
   }, 120000);
 
+  test("ADD CONSTRAINT EXCLUDE expression waits for referenced function", async () => {
+    await assertAlterTableWaitsForExpressionFunction(
+      [
+        "create extension btree_gist;",
+        ...baseStatements,
+        "alter table app.items add constraint items_bucket_excl exclude using gist ((app.bucket(amount)) with =);",
+        "create function app.bucket(input numeric) returns numeric language sql immutable as $$ select floor(input) $$;",
+      ],
+      28106,
+      "add constraint items_bucket_excl exclude using gist",
+    );
+  }, 120000);
+
+  test("ADD CONSTRAINT EXCLUDE predicate waits for referenced function", async () => {
+    await assertAlterTableWaitsForExpressionFunction(
+      [
+        "create extension btree_gist;",
+        ...baseStatements,
+        "alter table app.items add constraint items_positive_excl exclude using gist (amount with =) where (app.is_positive(amount));",
+        "create function app.is_positive(input numeric) returns boolean language sql immutable as $$ select input > 0 $$;",
+      ],
+      28107,
+      "add constraint items_positive_excl exclude using gist",
+    );
+  }, 120000);
+
   test("ADD GENERATED column waits for referenced function", async () => {
     await assertAlterTableWaitsForExpressionFunction(
       [

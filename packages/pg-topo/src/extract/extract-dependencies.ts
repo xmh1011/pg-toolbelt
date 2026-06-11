@@ -154,6 +154,25 @@ const extractCreateTableAsDependencies = (
   return { provides, requires };
 };
 
+const addConstraintExpressionDependencies = (
+  constraint: Record<string, unknown> | undefined,
+  requires: ObjectRef[],
+): void => {
+  if (!constraint) {
+    return;
+  }
+  for (const expressionNode of [
+    constraint.raw_expr,
+    constraint.cooked_expr,
+    constraint.exclusions,
+    constraint.where_clause,
+  ]) {
+    if (expressionNode) {
+      addExpressionDependencies(expressionNode, requires);
+    }
+  }
+};
+
 const extractAlterTableDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -189,9 +208,7 @@ const extractAlterTableDependencies = (
         provides.push(providedKey);
       }
     }
-    if (constraint?.raw_expr) {
-      addExpressionDependencies(constraint.raw_expr, requires);
-    }
+    addConstraintExpressionDependencies(constraint, requires);
 
     if (columnDefinition?.raw_default) {
       addExpressionDependencies(columnDefinition.raw_default, requires);
@@ -201,9 +218,7 @@ const extractAlterTableDependencies = (
       : [];
     for (const constraintItem of columnConstraints) {
       const columnConstraint = asRecord(asRecord(constraintItem)?.Constraint);
-      if (columnConstraint?.raw_expr) {
-        addExpressionDependencies(columnConstraint.raw_expr, requires);
-      }
+      addConstraintExpressionDependencies(columnConstraint, requires);
     }
 
     if (command?.subtype === "AT_ColumnDefault" && command.def) {

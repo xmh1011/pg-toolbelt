@@ -83,6 +83,22 @@ describe("diagnostics", () => {
     expect(unresolved).toBeDefined();
   });
 
+  test("reports unresolved row filter function for ALTER PUBLICATION ADD TABLE", async () => {
+    const result = await analyzeAndSort([
+      "alter publication pub_orders add table public.orders where (public.is_visible(id));",
+      "create table public.orders(id int primary key);",
+      "create publication pub_orders;",
+    ]);
+    const unresolved = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.details?.requiredObjectKey ===
+          "function:public:is_visible:(unknown)",
+    );
+
+    expect(unresolved).toBeDefined();
+  });
+
   test("cycle diagnostics include statement participants", async () => {
     const result = await analyzeAndSort([
       "create view public.v1 as select * from public.v2;",

@@ -563,17 +563,22 @@ const addPublicationObjectDependencies = (
     if (!publicationObjSpec) {
       continue;
     }
-    if (publicationObjSpec.pubobjtype === "PUBLICATIONOBJ_TABLE") {
-      const relation = asRecord(
-        asRecord(publicationObjSpec.pubtable)?.relation,
-      );
+    const publicationObjType = publicationObjSpec.pubobjtype;
+    const publicationTable = asRecord(publicationObjSpec.pubtable);
+    if (
+      publicationObjType === "PUBLICATIONOBJ_TABLE" ||
+      (publicationObjType === "PUBLICATIONOBJ_CONTINUATION" && publicationTable)
+    ) {
+      const relation = asRecord(publicationTable?.relation);
       const tableRef = relationFromRangeVarNode(relation, "table");
       if (tableRef) {
         requires.push(tableRef);
       }
+      addExpressionDependencies(publicationTable?.whereClause, requires);
     }
     if (
-      publicationObjSpec.pubobjtype === "PUBLICATIONOBJ_TABLES_IN_SCHEMA" &&
+      (publicationObjType === "PUBLICATIONOBJ_TABLES_IN_SCHEMA" ||
+        publicationObjType === "PUBLICATIONOBJ_CONTINUATION") &&
       typeof publicationObjSpec.name === "string"
     ) {
       requires.push(createObjectRefFromAst("schema", publicationObjSpec.name));

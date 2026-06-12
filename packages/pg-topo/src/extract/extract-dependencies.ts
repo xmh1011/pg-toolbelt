@@ -527,26 +527,7 @@ const extractCreatePublicationDependencies = (
     provides.push(createObjectRefFromAst("publication", statementNode.pubname));
   }
 
-  const objects = Array.isArray(statementNode.pubobjects)
-    ? statementNode.pubobjects
-    : [];
-  for (const objectNode of objects) {
-    const publicationObjSpec = asRecord(
-      asRecord(objectNode)?.PublicationObjSpec,
-    );
-    if (!publicationObjSpec) {
-      continue;
-    }
-    if (publicationObjSpec.pubobjtype === "PUBLICATIONOBJ_TABLE") {
-      const relation = asRecord(
-        asRecord(publicationObjSpec.pubtable)?.relation,
-      );
-      const tableRef = relationFromRangeVarNode(relation, "table");
-      if (tableRef) {
-        requires.push(tableRef);
-      }
-    }
-  }
+  addPublicationObjectDependencies(statementNode.pubobjects, requires);
 
   return { provides, requires };
 };
@@ -565,10 +546,7 @@ const addPublicationObjectDependencies = (
     }
     const publicationObjType = publicationObjSpec.pubobjtype;
     const publicationTable = asRecord(publicationObjSpec.pubtable);
-    if (
-      publicationObjType === "PUBLICATIONOBJ_TABLE" ||
-      (publicationObjType === "PUBLICATIONOBJ_CONTINUATION" && publicationTable)
-    ) {
+    if (publicationObjType === "PUBLICATIONOBJ_TABLE") {
       const relation = asRecord(publicationTable?.relation);
       const tableRef = relationFromRangeVarNode(relation, "table");
       if (tableRef) {
@@ -577,8 +555,7 @@ const addPublicationObjectDependencies = (
       addExpressionDependencies(publicationTable?.whereClause, requires);
     }
     if (
-      (publicationObjType === "PUBLICATIONOBJ_TABLES_IN_SCHEMA" ||
-        publicationObjType === "PUBLICATIONOBJ_CONTINUATION") &&
+      publicationObjType === "PUBLICATIONOBJ_TABLES_IN_SCHEMA" &&
       typeof publicationObjSpec.name === "string"
     ) {
       requires.push(createObjectRefFromAst("schema", publicationObjSpec.name));

@@ -1,83 +1,83 @@
 import { describe, expect, test } from "bun:test";
 import { analyzeAndSort } from "../src/analyze-and-sort";
-import { extractDependencies } from "../src/extract/extract-dependencies";
 import { objectRefKey } from "../src/model/object-ref";
 
-const emptyAnnotations = {
-  dependsOn: [],
-  requires: [],
-  provides: [],
-};
+const requiredObjectKeys = (
+  result: Awaited<ReturnType<typeof analyzeAndSort>>,
+): string[] =>
+  result.graph.edges
+    .flatMap((edge) => {
+      if (
+        (edge.reason === "requires" || edge.reason === "requires_compatible") &&
+        edge.objectRef
+      ) {
+        return [objectRefKey(edge.objectRef)];
+      }
+      return [];
+    })
+    .sort();
 
 describe("ALTER PUBLICATION dependencies", () => {
-  test("extracts continuation publication table and schema dependencies", () => {
-    const tableResult = extractDependencies(
-      "ALTER_PUBLICATION",
-      {
-        AlterPublicationStmt: {
-          pubname: "pub_orders",
-          action: "AP_AddObjects",
-          pubobjects: [
-            {
-              PublicationObjSpec: {
-                pubobjtype: "PUBLICATIONOBJ_TABLE",
-                pubtable: {
-                  relation: { schemaname: "public", relname: "orders" },
-                },
-              },
-            },
-            {
-              PublicationObjSpec: {
-                pubobjtype: "PUBLICATIONOBJ_CONTINUATION",
-                pubtable: {
-                  relation: { schemaname: "public", relname: "events" },
-                },
-              },
-            },
-          ],
-        },
-      },
-      emptyAnnotations,
+  test("orders ALTER PUBLICATION multi-table dependencies from real SQL", async () => {
+    const result = await analyzeAndSort([
+      "alter publication pub_orders add table public.orders, public.events;",
+      "create table public.events(id int primary key);",
+      "create publication pub_orders;",
+      "create table public.orders(id int primary key);",
+    ]);
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
     );
-    const schemaResult = extractDependencies(
-      "ALTER_PUBLICATION",
-      {
-        AlterPublicationStmt: {
-          pubname: "pub_sales",
-          action: "AP_SetObjects",
-          pubobjects: [
-            {
-              PublicationObjSpec: {
-                pubobjtype: "PUBLICATIONOBJ_TABLES_IN_SCHEMA",
-                name: "sales",
-              },
-            },
-            {
-              PublicationObjSpec: {
-                pubobjtype: "PUBLICATIONOBJ_CONTINUATION",
-                name: "marketing",
-              },
-            },
-          ],
-        },
-      },
-      emptyAnnotations,
+    const alterPublicationIndex = orderedSql.findIndex((sql) =>
+      sql.includes("alter publication pub_orders"),
     );
 
-    expect(tableResult.requires.map(objectRefKey).sort()).toEqual(
-      expect.arrayContaining([
-        "publication::pub_orders:",
-        "table:public:orders:",
-        "table:public:events:",
-      ]),
+    expect(alterPublicationIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      orderedSql.findIndex((sql) => sql.includes("create publication")),
+    ).toBeLessThan(alterPublicationIndex);
+    expect(
+      orderedSql.findIndex((sql) => sql.includes("create table public.events")),
+    ).toBeLessThan(alterPublicationIndex);
+    expect(
+      orderedSql.findIndex((sql) => sql.includes("create table public.orders")),
+    ).toBeLessThan(alterPublicationIndex);
+    expect(requiredObjectKeys(result)).toEqual([
+      "publication::pub_orders:",
+      "table:public:events:",
+      "table:public:orders:",
+    ]);
+  });
+
+  test("orders ALTER PUBLICATION multi-schema dependencies from real SQL", async () => {
+    const result = await analyzeAndSort([
+      "alter publication pub_sales set tables in schema sales, marketing;",
+      "create schema marketing;",
+      "create publication pub_sales;",
+      "create schema sales;",
+    ]);
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
     );
-    expect(schemaResult.requires.map(objectRefKey).sort()).toEqual(
-      expect.arrayContaining([
-        "publication::pub_sales:",
-        "schema::sales:",
-        "schema::marketing:",
-      ]),
+    const alterPublicationIndex = orderedSql.findIndex((sql) =>
+      sql.includes("alter publication pub_sales"),
     );
+
+    expect(alterPublicationIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      orderedSql.findIndex((sql) => sql.includes("create publication")),
+    ).toBeLessThan(alterPublicationIndex);
+    expect(
+      orderedSql.findIndex((sql) => sql.includes("create schema marketing")),
+    ).toBeLessThan(alterPublicationIndex);
+    expect(
+      orderedSql.findIndex((sql) => sql.includes("create schema sales")),
+    ).toBeLessThan(alterPublicationIndex);
+    expect(requiredObjectKeys(result)).toEqual([
+      "publication::pub_sales:",
+      "schema::marketing:",
+      "schema::sales:",
+    ]);
   });
 
   test("orders ALTER PUBLICATION row filter after referenced function", async () => {
@@ -108,5 +108,51 @@ describe("ALTER PUBLICATION dependencies", () => {
           edge.objectRef.name === "is_visible",
       ),
     ).toBe(true);
+  });
+
+  test("orders CREATE PUBLICATION row filter after referenced function", async () => {
+    const result = await analyzeAndSort([
+      "create publication pub_orders for table public.orders where (public.is_visible(id));",
+      "create table public.orders(id int primary key);",
+      "create function public.is_visible(order_id int) returns boolean language sql immutable as $$ select true $$;",
+    ]);
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const functionIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create function public.is_visible"),
+    );
+    const createPublicationIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create publication pub_orders"),
+    );
+
+    expect(functionIndex).toBeGreaterThanOrEqual(0);
+    expect(createPublicationIndex).toBeGreaterThanOrEqual(0);
+    expect(functionIndex).toBeLessThan(createPublicationIndex);
+    expect(requiredObjectKeys(result)).toEqual([
+      "function:public:is_visible:(unknown)",
+      "table:public:orders:",
+    ]);
+  });
+
+  test("orders CREATE PUBLICATION tables in schema after referenced schemas", async () => {
+    const result = await analyzeAndSort([
+      "create publication pub_sales for tables in schema sales, marketing;",
+      "create schema marketing;",
+      "create schema sales;",
+    ]);
+    const orderedClasses = result.ordered.map(
+      (statement) => statement.statementClass,
+    );
+
+    expect(orderedClasses).toEqual([
+      "CREATE_SCHEMA",
+      "CREATE_SCHEMA",
+      "CREATE_PUBLICATION",
+    ]);
+    expect(requiredObjectKeys(result)).toEqual([
+      "schema::marketing:",
+      "schema::sales:",
+    ]);
   });
 });

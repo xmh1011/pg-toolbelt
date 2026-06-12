@@ -1699,6 +1699,30 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("reports pg_catalog operator class families for nonmatching access methods", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using gist family pg_catalog.integer_ops as operator 1 <-> (app.score, app.score), function 1 app.score_consistent(internal, app.score, smallint, oid, internal);",
+      "create operator app.<-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
+      "create function app.score_distance(a app.score, b app.score) returns float8 language sql immutable strict as $$ select abs((a).value - (b).value)::float8 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const mismatchedFamily = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_family" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "integer_ops" &&
+            ref.signature === "(gist)",
+        ) === true,
+    );
+
+    expect(mismatchedFamily).toHaveLength(1);
+  });
+
   test("preserves local order-by operator families with built-in names", async () => {
     const result = await analyzeAndSort([
       "set search_path = public, pg_catalog;",
@@ -2514,6 +2538,26 @@ describe("range type dependencies", () => {
     expect(unresolvedPatternOperator).toHaveLength(1);
   });
 
+  test("reports mixed built-in operator class support operator signatures", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_ops for type int4 using btree as operator 1 < (int4, text), function 1 btint4cmp(int4, int4);",
+      "create schema app;",
+    ]);
+    const mixedSignatureOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "<" &&
+            ref.signature === "(public.int4,public.text)",
+        ) === true,
+    );
+
+    expect(mixedSignatureOperator).toHaveLength(1);
+  });
+
   test("preserves local range opclasses with built-in names", async () => {
     const result = await analyzeAndSort([
       "set search_path = public, pg_catalog;",
@@ -2593,6 +2637,26 @@ describe("range type dependencies", () => {
             ref.kind === "operator_class" &&
             ref.schema === "pg_catalog" &&
             ref.name === "text_ops" &&
+            ref.signature === "(btree,int4)",
+        ) === true,
+    );
+
+    expect(incompatibleOpclass).toHaveLength(1);
+  });
+
+  test("reports pg_catalog record range opclasses for non-record subtypes", async () => {
+    const result = await analyzeAndSort([
+      "create type app.r as range (subtype = int4, subtype_opclass = pg_catalog.record_ops);",
+      "create schema app;",
+    ]);
+    const incompatibleOpclass = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_class" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "record_ops" &&
             ref.signature === "(btree,int4)",
         ) === true,
     );

@@ -828,20 +828,26 @@ const builtInRangeOperatorClassNames = new Set([
   "name_ops",
   "numeric_ops",
   "oid_ops",
+  "oidvector_ops",
   "pg_lsn_ops",
+  "record_image_ops",
   "record_ops",
   "range_ops",
   "multirange_ops",
   "text_ops",
   "text_pattern_ops",
+  "tid_ops",
   "time_ops",
   "timestamp_ops",
   "timestamptz_ops",
   "timetz_ops",
+  "tsquery_ops",
+  "tsvector_ops",
   "uuid_ops",
   "varbit_ops",
   "varchar_ops",
   "varchar_pattern_ops",
+  "xid8_ops",
 ]);
 
 const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
@@ -867,18 +873,24 @@ const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
   ["name_ops", ["name"]],
   ["numeric_ops", ["numeric"]],
   ["oid_ops", ["oid"]],
+  ["oidvector_ops", ["oidvector"]],
   ["pg_lsn_ops", ["pg_lsn"]],
+  ["record_image_ops", ["record"]],
   ["record_ops", ["record"]],
   ["text_ops", ["text"]],
   ["text_pattern_ops", ["text"]],
+  ["tid_ops", ["tid"]],
   ["time_ops", ["time"]],
   ["timestamp_ops", ["timestamp"]],
   ["timestamptz_ops", ["timestamptz"]],
   ["timetz_ops", ["timetz"]],
+  ["tsquery_ops", ["tsquery"]],
+  ["tsvector_ops", ["tsvector"]],
   ["uuid_ops", ["uuid"]],
   ["varbit_ops", ["varbit"]],
   ["varchar_ops", ["varchar"]],
   ["varchar_pattern_ops", ["varchar"]],
+  ["xid8_ops", ["xid8"]],
 ]);
 
 const typeRefMatchesBuiltInNames = (
@@ -1060,12 +1072,89 @@ const isBuiltInRangeOperatorClassName = (
 };
 
 const builtInBtreeOperatorFamilyNames = new Set([
-  ...builtInRangeOperatorClassNames,
+  "array_ops",
+  "bit_ops",
+  "bool_ops",
+  "bpchar_ops",
+  "bpchar_pattern_ops",
+  "bytea_ops",
+  "char_ops",
   "datetime_ops",
+  "enum_ops",
   "float_ops",
   "integer_ops",
+  "interval_ops",
+  "jsonb_ops",
+  "macaddr8_ops",
+  "macaddr_ops",
+  "money_ops",
+  "multirange_ops",
   "network_ops",
+  "numeric_ops",
+  "oid_ops",
+  "oidvector_ops",
+  "pg_lsn_ops",
+  "range_ops",
+  "record_image_ops",
+  "record_ops",
+  "text_ops",
+  "text_pattern_ops",
+  "tid_ops",
+  "time_ops",
+  "timetz_ops",
+  "tsquery_ops",
+  "tsvector_ops",
+  "uuid_ops",
+  "varbit_ops",
+  "xid8_ops",
 ]);
+
+const builtInHashOperatorFamilyNames = new Set([
+  "aclitem_ops",
+  "array_ops",
+  "bool_ops",
+  "bpchar_ops",
+  "bpchar_pattern_ops",
+  "bytea_ops",
+  "char_ops",
+  "cid_ops",
+  "date_ops",
+  "enum_ops",
+  "float_ops",
+  "integer_ops",
+  "interval_ops",
+  "jsonb_ops",
+  "macaddr8_ops",
+  "macaddr_ops",
+  "multirange_ops",
+  "network_ops",
+  "numeric_ops",
+  "oid_ops",
+  "oidvector_ops",
+  "pg_lsn_ops",
+  "range_ops",
+  "record_ops",
+  "text_ops",
+  "text_pattern_ops",
+  "tid_ops",
+  "time_ops",
+  "timestamp_ops",
+  "timestamptz_ops",
+  "timetz_ops",
+  "uuid_ops",
+  "xid8_ops",
+  "xid_ops",
+]);
+
+const builtInOperatorFamilyNamesByAccessMethod = new Map([
+  ["btree", builtInBtreeOperatorFamilyNames],
+  ["hash", builtInHashOperatorFamilyNames],
+]);
+
+const builtInOperatorFamilyNamesForAccessMethod = (
+  accessMethod: string,
+): ReadonlySet<string> | undefined =>
+  builtInOperatorFamilyNamesByAccessMethod.get(accessMethod.toLowerCase());
 
 const isBuiltInBtreeOperatorFamilyName = (nameParts: string[]): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
@@ -1087,22 +1176,37 @@ const isUnqualifiedBuiltInBtreeOperatorFamilyName = (
   );
 };
 
-const isBtreeAccessMethod = (accessMethod: string): boolean =>
-  accessMethod.toLowerCase() === "btree";
-
 const isBuiltInOperatorFamilyNameForAccessMethod = (
   nameParts: string[],
   accessMethod: string,
-): boolean =>
-  isBtreeAccessMethod(accessMethod) &&
-  isBuiltInBtreeOperatorFamilyName(nameParts);
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name) {
+    return false;
+  }
+
+  const builtInFamilyNames =
+    builtInOperatorFamilyNamesForAccessMethod(accessMethod);
+  return (
+    builtInFamilyNames?.has(name) === true &&
+    nameParts.length === 2 &&
+    nameParts[0]?.toLowerCase() === "pg_catalog"
+  );
+};
 
 const isUnqualifiedBuiltInOperatorFamilyNameForAccessMethod = (
   nameParts: string[],
   accessMethod: string,
-): boolean =>
-  isBtreeAccessMethod(accessMethod) &&
-  isUnqualifiedBuiltInBtreeOperatorFamilyName(nameParts);
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name || nameParts.length !== 1) {
+    return false;
+  }
+
+  return (
+    builtInOperatorFamilyNamesForAccessMethod(accessMethod)?.has(name) === true
+  );
+};
 
 // Opclass items commonly reference pg_catalog support objects without schema
 // qualification. Keep PostgreSQL's built-in btree support routines out of
@@ -1122,13 +1226,21 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["btcharcmp", [["char", "char"]]],
   ["btequalimage", [["oid"]]],
   ["btfloat4cmp", [["float4", "float4"]]],
+  ["btfloat48cmp", [["float4", "float8"]]],
   ["btfloat4sortsupport", [["internal"]]],
+  ["btfloat84cmp", [["float8", "float4"]]],
   ["btfloat8cmp", [["float8", "float8"]]],
   ["btfloat8sortsupport", [["internal"]]],
+  ["btint24cmp", [["int2", "int4"]]],
+  ["btint28cmp", [["int2", "int8"]]],
   ["btint2cmp", [["int2", "int2"]]],
   ["btint2sortsupport", [["internal"]]],
+  ["btint42cmp", [["int4", "int2"]]],
+  ["btint48cmp", [["int4", "int8"]]],
   ["btint4cmp", [["int4", "int4"]]],
   ["btint4sortsupport", [["internal"]]],
+  ["btint82cmp", [["int8", "int2"]]],
+  ["btint84cmp", [["int8", "int4"]]],
   ["btint8cmp", [["int8", "int8"]]],
   ["btint8sortsupport", [["internal"]]],
   ["btnamecmp", [["name", "name"]]],
@@ -1354,10 +1466,36 @@ const isBuiltInOperatorClassSupportOperatorName = (
   );
 };
 
+const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
+const textEncoder = new TextEncoder();
+
+const clipPostgresIdentifier = (
+  identifier: string,
+  maxBytes = POSTGRES_IDENTIFIER_MAX_BYTES,
+): string => {
+  let clipped = "";
+  let byteLength = 0;
+
+  for (const char of identifier) {
+    const charLength = textEncoder.encode(char).length;
+    if (byteLength + charLength > maxBytes) {
+      break;
+    }
+    clipped += char;
+    byteLength += charLength;
+  }
+
+  return clipped;
+};
+
 const defaultMultirangeTypeName = (rangeTypeName: string): string =>
   rangeTypeName.includes("range")
-    ? rangeTypeName.replace("range", "multirange")
-    : `${rangeTypeName}_multirange`;
+    ? clipPostgresIdentifier(rangeTypeName.replace("range", "multirange"))
+    : `${clipPostgresIdentifier(
+        rangeTypeName,
+        POSTGRES_IDENTIFIER_MAX_BYTES -
+          textEncoder.encode("_multirange").length,
+      )}_multirange`;
 
 const baseTypeFunctionOptionNames = new Set([
   "input",
@@ -1933,6 +2071,36 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["boolle", [["bool", "bool"]]],
   ["boollt", [["bool", "bool"]]],
   ["boolne", [["bool", "bool"]]],
+  ["biteq", [["bit", "bit"]]],
+  ["bitge", [["bit", "bit"]]],
+  ["bitgt", [["bit", "bit"]]],
+  ["bitle", [["bit", "bit"]]],
+  ["bitlt", [["bit", "bit"]]],
+  ["bitne", [["bit", "bit"]]],
+  ["bpchareq", [["bpchar", "bpchar"]]],
+  ["bpcharge", [["bpchar", "bpchar"]]],
+  ["bpchargt", [["bpchar", "bpchar"]]],
+  ["bpcharle", [["bpchar", "bpchar"]]],
+  ["bpcharlt", [["bpchar", "bpchar"]]],
+  ["bpcharne", [["bpchar", "bpchar"]]],
+  ["byteaeq", [["bytea", "bytea"]]],
+  ["byteage", [["bytea", "bytea"]]],
+  ["byteagt", [["bytea", "bytea"]]],
+  ["byteale", [["bytea", "bytea"]]],
+  ["bytealt", [["bytea", "bytea"]]],
+  ["byteane", [["bytea", "bytea"]]],
+  ["chareq", [["char", "char"]]],
+  ["charge", [["char", "char"]]],
+  ["chargt", [["char", "char"]]],
+  ["charle", [["char", "char"]]],
+  ["charlt", [["char", "char"]]],
+  ["charne", [["char", "char"]]],
+  ["date_eq", [["date", "date"]]],
+  ["date_ge", [["date", "date"]]],
+  ["date_gt", [["date", "date"]]],
+  ["date_le", [["date", "date"]]],
+  ["date_lt", [["date", "date"]]],
+  ["date_ne", [["date", "date"]]],
   ["float4eq", [["float4", "float4"]]],
   ["float4ge", [["float4", "float4"]]],
   ["float4gt", [["float4", "float4"]]],
@@ -1966,24 +2134,132 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int8lt", [["int8", "int8"]]],
   ["int8ne", [["int8", "int8"]]],
   ["int8um", [["int8"]]],
+  ["interval_eq", [["interval", "interval"]]],
+  ["interval_ge", [["interval", "interval"]]],
+  ["interval_gt", [["interval", "interval"]]],
+  ["interval_le", [["interval", "interval"]]],
+  ["interval_lt", [["interval", "interval"]]],
+  ["interval_ne", [["interval", "interval"]]],
+  ["jsonb_eq", [["jsonb", "jsonb"]]],
+  ["jsonb_ge", [["jsonb", "jsonb"]]],
+  ["jsonb_gt", [["jsonb", "jsonb"]]],
+  ["jsonb_le", [["jsonb", "jsonb"]]],
+  ["jsonb_lt", [["jsonb", "jsonb"]]],
+  ["jsonb_ne", [["jsonb", "jsonb"]]],
+  ["macaddr_eq", [["macaddr", "macaddr"]]],
+  ["macaddr_ge", [["macaddr", "macaddr"]]],
+  ["macaddr_gt", [["macaddr", "macaddr"]]],
+  ["macaddr_le", [["macaddr", "macaddr"]]],
+  ["macaddr_lt", [["macaddr", "macaddr"]]],
+  ["macaddr_ne", [["macaddr", "macaddr"]]],
+  ["macaddr8_eq", [["macaddr8", "macaddr8"]]],
+  ["macaddr8_ge", [["macaddr8", "macaddr8"]]],
+  ["macaddr8_gt", [["macaddr8", "macaddr8"]]],
+  ["macaddr8_le", [["macaddr8", "macaddr8"]]],
+  ["macaddr8_lt", [["macaddr8", "macaddr8"]]],
+  ["macaddr8_ne", [["macaddr8", "macaddr8"]]],
+  ["nameeq", [["name", "name"]]],
+  ["namege", [["name", "name"]]],
+  ["namegt", [["name", "name"]]],
+  ["namele", [["name", "name"]]],
+  ["namelt", [["name", "name"]]],
+  ["namene", [["name", "name"]]],
+  ["network_eq", [["inet", "inet"]]],
+  ["network_ge", [["inet", "inet"]]],
+  ["network_gt", [["inet", "inet"]]],
+  ["network_le", [["inet", "inet"]]],
+  ["network_lt", [["inet", "inet"]]],
+  ["network_ne", [["inet", "inet"]]],
   ["numeric_eq", [["numeric", "numeric"]]],
   ["numeric_ge", [["numeric", "numeric"]]],
   ["numeric_gt", [["numeric", "numeric"]]],
   ["numeric_le", [["numeric", "numeric"]]],
   ["numeric_lt", [["numeric", "numeric"]]],
   ["numeric_ne", [["numeric", "numeric"]]],
+  ["oideq", [["oid", "oid"]]],
+  ["oidge", [["oid", "oid"]]],
+  ["oidgt", [["oid", "oid"]]],
+  ["oidle", [["oid", "oid"]]],
+  ["oidlt", [["oid", "oid"]]],
+  ["oidne", [["oid", "oid"]]],
+  ["oidvectoreq", [["oidvector", "oidvector"]]],
+  ["oidvectorge", [["oidvector", "oidvector"]]],
+  ["oidvectorgt", [["oidvector", "oidvector"]]],
+  ["oidvectorle", [["oidvector", "oidvector"]]],
+  ["oidvectorlt", [["oidvector", "oidvector"]]],
+  ["oidvectorne", [["oidvector", "oidvector"]]],
+  ["record_eq", [["record", "record"]]],
+  ["record_ge", [["record", "record"]]],
+  ["record_gt", [["record", "record"]]],
+  ["record_le", [["record", "record"]]],
+  ["record_lt", [["record", "record"]]],
+  ["record_ne", [["record", "record"]]],
   ["texteq", [["text", "text"]]],
   ["text_ge", [["text", "text"]]],
   ["text_gt", [["text", "text"]]],
   ["text_le", [["text", "text"]]],
   ["text_lt", [["text", "text"]]],
   ["textne", [["text", "text"]]],
+  ["tideq", [["tid", "tid"]]],
+  ["tidge", [["tid", "tid"]]],
+  ["tidgt", [["tid", "tid"]]],
+  ["tidle", [["tid", "tid"]]],
+  ["tidlt", [["tid", "tid"]]],
+  ["tidne", [["tid", "tid"]]],
+  ["time_eq", [["time", "time"]]],
+  ["time_ge", [["time", "time"]]],
+  ["time_gt", [["time", "time"]]],
+  ["time_le", [["time", "time"]]],
+  ["time_lt", [["time", "time"]]],
+  ["time_ne", [["time", "time"]]],
+  ["timestamp_eq", [["timestamp", "timestamp"]]],
+  ["timestamp_ge", [["timestamp", "timestamp"]]],
+  ["timestamp_gt", [["timestamp", "timestamp"]]],
+  ["timestamp_le", [["timestamp", "timestamp"]]],
+  ["timestamp_lt", [["timestamp", "timestamp"]]],
+  ["timestamp_ne", [["timestamp", "timestamp"]]],
+  ["timestamptz_eq", [["timestamptz", "timestamptz"]]],
+  ["timestamptz_ge", [["timestamptz", "timestamptz"]]],
+  ["timestamptz_gt", [["timestamptz", "timestamptz"]]],
+  ["timestamptz_le", [["timestamptz", "timestamptz"]]],
+  ["timestamptz_lt", [["timestamptz", "timestamptz"]]],
+  ["timestamptz_ne", [["timestamptz", "timestamptz"]]],
+  ["timetz_eq", [["timetz", "timetz"]]],
+  ["timetz_ge", [["timetz", "timetz"]]],
+  ["timetz_gt", [["timetz", "timetz"]]],
+  ["timetz_le", [["timetz", "timetz"]]],
+  ["timetz_lt", [["timetz", "timetz"]]],
+  ["timetz_ne", [["timetz", "timetz"]]],
+  ["tsquery_eq", [["tsquery", "tsquery"]]],
+  ["tsquery_ge", [["tsquery", "tsquery"]]],
+  ["tsquery_gt", [["tsquery", "tsquery"]]],
+  ["tsquery_le", [["tsquery", "tsquery"]]],
+  ["tsquery_lt", [["tsquery", "tsquery"]]],
+  ["tsquery_ne", [["tsquery", "tsquery"]]],
+  ["tsvector_eq", [["tsvector", "tsvector"]]],
+  ["tsvector_ge", [["tsvector", "tsvector"]]],
+  ["tsvector_gt", [["tsvector", "tsvector"]]],
+  ["tsvector_le", [["tsvector", "tsvector"]]],
+  ["tsvector_lt", [["tsvector", "tsvector"]]],
+  ["tsvector_ne", [["tsvector", "tsvector"]]],
   ["uuid_eq", [["uuid", "uuid"]]],
   ["uuid_ge", [["uuid", "uuid"]]],
   ["uuid_gt", [["uuid", "uuid"]]],
   ["uuid_le", [["uuid", "uuid"]]],
   ["uuid_lt", [["uuid", "uuid"]]],
   ["uuid_ne", [["uuid", "uuid"]]],
+  ["varbiteq", [["varbit", "varbit"]]],
+  ["varbitge", [["varbit", "varbit"]]],
+  ["varbitgt", [["varbit", "varbit"]]],
+  ["varbitle", [["varbit", "varbit"]]],
+  ["varbitlt", [["varbit", "varbit"]]],
+  ["varbitne", [["varbit", "varbit"]]],
+  ["xid8eq", [["xid8", "xid8"]]],
+  ["xid8ge", [["xid8", "xid8"]]],
+  ["xid8gt", [["xid8", "xid8"]]],
+  ["xid8le", [["xid8", "xid8"]]],
+  ["xid8lt", [["xid8", "xid8"]]],
+  ["xid8ne", [["xid8", "xid8"]]],
 ]);
 
 const operatorEstimatorFunctionArgs = (
@@ -2289,12 +2565,7 @@ const extractCreateOperatorClassDependencies = (
           ? markOmitIfNoLocalProducerRef(operatorFamilyRequirement)
           : operatorFamilyRequirement,
       );
-      if (
-        operatorFamilyRef.schema?.toLowerCase() === "pg_catalog" &&
-        builtInBtreeOperatorFamilyNames.has(
-          operatorFamilyRef.name.toLowerCase(),
-        )
-      ) {
+      if (operatorFamilyRef.schema?.toLowerCase() === "pg_catalog") {
         diagnostics.push({
           code: "UNRESOLVED_DEPENDENCY",
           message: `No pg_catalog operator family '${operatorFamilyRef.name}' found for access method '${accessMethod || "unknown"}'.`,

@@ -2422,6 +2422,78 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("does not require producer statements for built-in pattern range operator classes", async () => {
+    const result = await analyzeAndSort([
+      "create type app.label_range as range (subtype = text, subtype_opclass = text_pattern_ops);",
+      "create type app.code_range as range (subtype = varchar, subtype_opclass = varchar_pattern_ops);",
+      "create type app.fixed_code_range as range (subtype = bpchar, subtype_opclass = bpchar_pattern_ops);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(executionErrors).toHaveLength(0);
+  }, 120000);
+
+  test("accepts explicit range opclasses through domain base types", async () => {
+    const result = await analyzeAndSort([
+      "create type app.price_range as range (subtype = app.price, subtype_opclass = numeric_ops);",
+      "create domain app.price as numeric;",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const domainIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create domain app.price"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.price_range"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(domainIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(domainIndex);
+  }, 120000);
+
+  test("does not require producers for pg_catalog pattern support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.text_pattern_ops for type text using btree as operator 1 ~<~ (text, text), operator 2 ~<=~ (text, text), operator 3 = (text, text), operator 4 ~>=~ (text, text), operator 5 ~>~ (text, text), function 1 bttext_pattern_cmp(text, text);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolvedPatternOperators = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ["~<~", "~<=~", "~>=~", "~>~"].includes(ref.name),
+        ) === true,
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+
+    expect(unresolvedPatternOperators).toHaveLength(0);
+    expect(executionErrors).toHaveLength(0);
+  }, 120000);
+
   test("preserves local range opclasses with built-in names", async () => {
     const result = await analyzeAndSort([
       "set search_path = public, pg_catalog;",

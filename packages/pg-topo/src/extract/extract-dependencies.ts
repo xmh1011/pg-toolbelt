@@ -804,6 +804,7 @@ const builtInRangeOperatorClassNames = new Set([
   "bit_ops",
   "bool_ops",
   "bpchar_ops",
+  "bpchar_pattern_ops",
   "bytea_ops",
   "char_ops",
   "cidr_ops",
@@ -828,6 +829,7 @@ const builtInRangeOperatorClassNames = new Set([
   "range_ops",
   "multirange_ops",
   "text_ops",
+  "text_pattern_ops",
   "time_ops",
   "timestamp_ops",
   "timestamptz_ops",
@@ -835,12 +837,14 @@ const builtInRangeOperatorClassNames = new Set([
   "uuid_ops",
   "varbit_ops",
   "varchar_ops",
+  "varchar_pattern_ops",
 ]);
 
 const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
   ["bit_ops", ["bit"]],
   ["bool_ops", ["bool"]],
   ["bpchar_ops", ["bpchar"]],
+  ["bpchar_pattern_ops", ["bpchar"]],
   ["bytea_ops", ["bytea"]],
   ["char_ops", ["char"]],
   ["cidr_ops", ["cidr"]],
@@ -861,6 +865,7 @@ const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
   ["oid_ops", ["oid"]],
   ["pg_lsn_ops", ["pg_lsn"]],
   ["text_ops", ["text"]],
+  ["text_pattern_ops", ["text"]],
   ["time_ops", ["time"]],
   ["timestamp_ops", ["timestamp"]],
   ["timestamptz_ops", ["timestamptz"]],
@@ -868,6 +873,7 @@ const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
   ["uuid_ops", ["uuid"]],
   ["varbit_ops", ["varbit"]],
   ["varchar_ops", ["varchar"]],
+  ["varchar_pattern_ops", ["varchar"]],
 ]);
 
 const typeRefMatchesBuiltInNames = (
@@ -1262,6 +1268,10 @@ const builtInOperatorClassSupportOperatorNames = new Set([
   "=",
   ">=",
   ">",
+  "~<~",
+  "~<=~",
+  "~>=~",
+  "~>~",
 ]);
 
 const isBuiltInOperatorClassSupportOperatorName = (
@@ -1740,16 +1750,19 @@ const extractCreateRangeDependencies = (
         // PostgreSQL range subtypes resolve SUBTYPE_OPCLASS against the btree
         // access method, even when another method has an opclass with the same
         // schema/name.
+        const operatorClassSubtypeRef = subtypeRef
+          ? (domainBaseTypeRef(subtypeRef, context) ?? subtypeRef)
+          : null;
         const operatorClassRequirement = createObjectRefFromAst(
           "operator_class",
           operatorClassRef.name,
           operatorClassRef.schema,
-          operatorClassSignature("btree", subtypeRef),
+          operatorClassSignature("btree", operatorClassSubtypeRef),
         );
         if (
           isBuiltInRangeOperatorClassName(
             operatorClassNameParts,
-            subtypeRef,
+            operatorClassSubtypeRef,
             context,
           )
         ) {

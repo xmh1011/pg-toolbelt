@@ -2494,6 +2494,26 @@ describe("range type dependencies", () => {
     expect(executionErrors).toHaveLength(0);
   }, 120000);
 
+  test("requires non-pattern support operators with pattern names", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_pattern_ops for type int4 using btree as operator 1 ~<~ (int4, int4), function 1 btint4cmp(int4, int4);",
+      "create schema app;",
+    ]);
+    const unresolvedPatternOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "~<~" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+
+    expect(unresolvedPatternOperator).toHaveLength(1);
+  });
+
   test("preserves local range opclasses with built-in names", async () => {
     const result = await analyzeAndSort([
       "set search_path = public, pg_catalog;",
@@ -2558,6 +2578,26 @@ describe("range type dependencies", () => {
       signature: "(btree,int4)",
     });
     expect(missingInt4Opclass).toHaveLength(1);
+  });
+
+  test("reports pg_catalog range opclasses that do not match the subtype", async () => {
+    const result = await analyzeAndSort([
+      "create type app.r as range (subtype = int4, subtype_opclass = pg_catalog.text_ops);",
+      "create schema app;",
+    ]);
+    const incompatibleOpclass = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_class" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "text_ops" &&
+            ref.signature === "(btree,int4)",
+        ) === true,
+    );
+
+    expect(incompatibleOpclass).toHaveLength(1);
   });
 
   test("does not require producer statements for built-in range subtypes outside the core type list", async () => {

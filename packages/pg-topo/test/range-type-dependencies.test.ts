@@ -894,6 +894,27 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("does not require producer statements for built-in date operator implementation functions", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<< (function = date_lt, leftarg = date, rightarg = date);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<<"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "date_lt",
+      signature: "(date,date)",
+    });
+  });
+
   test("requires exact operator implementation signatures", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = app.score_eq, leftarg = app.score, rightarg = app.score);",
@@ -1237,6 +1258,29 @@ describe("range type dependencies", () => {
       signature: "(internal)",
     });
   }, 120000);
+
+  test("does not require producer statements for built-in cross-type opclass support functions", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_cross_ops for type int4 using btree as operator 1 < (int4, int4), function 1 (int4, int8) btint48cmp(int4, int8);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.int4_cross_ops"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "btint48cmp",
+      signature: "(public.int4,public.int8)",
+    });
+  });
 
   test("orders custom subtype opclasses with built-in names before range types", async () => {
     const result = await analyzeAndSort([
@@ -1699,6 +1743,29 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("does not require producer statements for pg_catalog hash operator class families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_hash_ops for type int4 using hash family pg_catalog.integer_ops as operator 1 = (int4, int4), function 1 hashint4(int4);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.int4_hash_ops"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator_family",
+      schema: "pg_catalog",
+      name: "integer_ops",
+      signature: "(hash)",
+    });
+  });
+
   test("reports pg_catalog operator class families for nonmatching access methods", async () => {
     const result = await analyzeAndSort([
       "create operator class app.score_ops for type app.score using gist family pg_catalog.integer_ops as operator 1 <-> (app.score, app.score), function 1 app.score_consistent(internal, app.score, smallint, oid, internal);",
@@ -1721,6 +1788,26 @@ describe("range type dependencies", () => {
     );
 
     expect(mismatchedFamily).toHaveLength(1);
+  });
+
+  test("reports pg_catalog opclass names that are not operator families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.bad_family_ops for type int4 using btree family pg_catalog.int4_ops as operator 1 < (int4, int4), function 1 btint4cmp(int4, int4);",
+      "create schema app;",
+    ]);
+    const invalidFamily = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_family" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "int4_ops" &&
+            ref.signature === "(btree)",
+        ) === true,
+    );
+
+    expect(invalidFamily).toHaveLength(1);
   });
 
   test("preserves local order-by operator families with built-in names", async () => {
@@ -2958,6 +3045,31 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
 
+  test("clips implicit multirange type names to PostgreSQL identifier length", async () => {
+    const rangeTypeName =
+      "ledger_transaction_identifier_bucket_token_history_segmentalpha";
+    const multirangeTypeName =
+      "ledger_transaction_identifier_bucket_token_history_s_multirange";
+    const result = await analyzeAndSort([
+      `create table app.ledger_events(id int primary key, spans app.${multirangeTypeName} not null);`,
+      `create type app.${rangeTypeName} as range (subtype = int4);`,
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes(`create type app.${rangeTypeName}`),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(rangeStatement?.provides).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: multirangeTypeName,
+    });
+  });
+
   test("uses PostgreSQL default multirange names for embedded range substrings", async () => {
     const result = await analyzeAndSort([
       "create table app.time_buckets(id int primary key, spans app.timemultirange_bucket not null);",
@@ -3606,6 +3718,20 @@ describe("range type dependencies", () => {
       schema: "public",
       name: "point",
     });
+  });
+
+  test("does not require producer statements for remaining built-in btree range opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create type app.tx_range as range (subtype = xid8);",
+      "create type app.tid_range as range (subtype = tid, subtype_opclass = tid_ops);",
+      "create type app.oidvector_range as range (subtype = oidvector, subtype_opclass = oidvector_ops);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+
+    expect(unresolved).toHaveLength(0);
   });
 
   test("matches typmod input functions with array argument providers", async () => {

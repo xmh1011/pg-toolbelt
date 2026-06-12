@@ -893,6 +893,12 @@ const builtInRangeOperatorClassSubtypes = new Map<string, string[]>([
   ["xid8_ops", ["xid8"]],
 ]);
 
+const binaryCoercibleRangeOperatorClassSubtypes = new Map<string, string[]>([
+  ["inet_ops", ["cidr"]],
+  ["text_ops", ["varchar"]],
+  ["text_pattern_ops", ["varchar"]],
+]);
+
 const typeRefMatchesBuiltInNames = (
   typeRef: ObjectRef | null,
   names: string[],
@@ -1066,9 +1072,12 @@ const isBuiltInRangeOperatorClassName = (
   }
 
   // Some user-defined opclasses intentionally reuse built-in names. Only skip
-  // concrete built-in names when the range subtype matches the pg_catalog
-  // opclass they normally belong to.
-  return typeRefMatchesBuiltInNames(subtypeRef, expectedSubtypes);
+  // concrete built-in names when the range subtype is compatible with the
+  // pg_catalog opclass input type.
+  return typeRefMatchesBuiltInNames(subtypeRef, [
+    ...expectedSubtypes,
+    ...(binaryCoercibleRangeOperatorClassSubtypes.get(name) ?? []),
+  ]);
 };
 
 const builtInBtreeOperatorFamilyNames = new Set([
@@ -1358,9 +1367,72 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["xid8cmp", [["xid8", "xid8"]]],
 ]);
 
+const isHashSupportFunctionName = (name: string): boolean =>
+  name.startsWith("hash") || name.includes("_hash");
+
+const builtInOperatorClassSupportFunctionMatchesSlot = (
+  name: string,
+  signature: string[],
+  accessMethod: string,
+  supportNumber: number,
+): boolean => {
+  const normalizedAccessMethod = accessMethod.toLowerCase();
+
+  if (normalizedAccessMethod === "btree") {
+    if (supportNumber === 1) {
+      return (
+        signature.length === 2 &&
+        name !== "in_range" &&
+        !name.endsWith("sortsupport") &&
+        !isHashSupportFunctionName(name)
+      );
+    }
+
+    if (supportNumber === 2) {
+      return (
+        signature.length === 1 &&
+        signature[0] === "internal" &&
+        name.endsWith("sortsupport")
+      );
+    }
+
+    if (supportNumber === 3) {
+      return name === "in_range";
+    }
+
+    if (supportNumber === 4) {
+      return (
+        signature.length === 1 &&
+        signature[0] === "oid" &&
+        (name === "btequalimage" || name === "btvarstrequalimage")
+      );
+    }
+  }
+
+  if (normalizedAccessMethod === "hash") {
+    if (supportNumber === 1) {
+      return (
+        signature.length === 1 &&
+        !name.endsWith("sortsupport") &&
+        name !== "btequalimage" &&
+        name !== "btvarstrequalimage" &&
+        name !== "in_range"
+      );
+    }
+
+    if (supportNumber === 2) {
+      return signature.length === 2 && signature[1] === "int8";
+    }
+  }
+
+  return false;
+};
+
 const isBuiltInOperatorClassSupportFunctionName = (
   nameParts: string[],
   args: (ObjectRef | null)[],
+  accessMethod: string,
+  supportNumber: number,
   context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
@@ -1381,6 +1453,12 @@ const isBuiltInOperatorClassSupportFunctionName = (
 
   return builtInSignatures.some(
     (signature) =>
+      builtInOperatorClassSupportFunctionMatchesSlot(
+        name,
+        signature,
+        accessMethod,
+        supportNumber,
+      ) &&
       args.length === signature.length &&
       signature.every((typeName, index) =>
         typeRefMatchesBuiltInSupportTypeName(
@@ -1407,6 +1485,41 @@ const builtInPatternOperatorClassSupportOperatorNames = new Set([
   "~>~",
 ]);
 
+const builtInBtreeOperatorStrategies = new Map([
+  ["<", 1],
+  ["<=", 2],
+  ["=", 3],
+  [">=", 4],
+  [">", 5],
+]);
+
+const builtInBtreePatternOperatorStrategies = new Map([
+  ["~<~", 1],
+  ["~<=~", 2],
+  ["~>=~", 4],
+  ["~>~", 5],
+]);
+
+const builtInOperatorClassSupportOperatorMatchesSlot = (
+  name: string,
+  accessMethod: string,
+  strategyNumber: number,
+): boolean => {
+  const normalizedAccessMethod = accessMethod.toLowerCase();
+  if (normalizedAccessMethod === "btree") {
+    return (
+      builtInBtreeOperatorStrategies.get(name) === strategyNumber ||
+      builtInBtreePatternOperatorStrategies.get(name) === strategyNumber
+    );
+  }
+
+  if (normalizedAccessMethod === "hash") {
+    return name === "=" && strategyNumber === 1;
+  }
+
+  return false;
+};
+
 const typeRefMatchesBuiltInPatternOperatorType = (
   typeRef: ObjectRef | null,
 ): boolean =>
@@ -1416,6 +1529,8 @@ const isBuiltInOperatorClassSupportOperatorName = (
   nameParts: string[],
   args: (ObjectRef | null)[],
   operatorClassDataTypeRef: ObjectRef | null,
+  accessMethod: string,
+  strategyNumber: number,
   context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
@@ -1427,6 +1542,16 @@ const isBuiltInOperatorClassSupportOperatorName = (
     !name ||
     (!builtInOperatorClassSupportOperatorNames.has(name) &&
       !builtInPatternOperatorClassSupportOperatorNames.has(name))
+  ) {
+    return false;
+  }
+
+  if (
+    !builtInOperatorClassSupportOperatorMatchesSlot(
+      name,
+      accessMethod,
+      strategyNumber,
+    )
   ) {
     return false;
   }
@@ -2034,31 +2159,39 @@ const operatorImplementationFunctionOptionNames = new Set([
   "procedure",
 ]);
 const operatorEstimatorFunctionOptionNames = new Set(["restrict", "join"]);
-const builtInOperatorEstimatorFunctionNames = new Set([
-  "areajoinsel",
+const builtInRestrictEstimatorFunctionNames = new Set([
   "areasel",
-  "contjoinsel",
   "contsel",
-  "eqjoinsel",
   "eqsel",
-  "iclikejoinsel",
   "iclikesel",
-  "icnlikejoinsel",
   "icnlikesel",
-  "likejoinsel",
   "likesel",
-  "matchingjoinsel",
   "matchingsel",
-  "neqjoinsel",
   "neqsel",
-  "nlikejoinsel",
   "nlikesel",
-  "positionjoinsel",
   "positionsel",
-  "scalarltjoinsel",
   "scalarltsel",
-  "scalargtjoinsel",
   "scalargtsel",
+]);
+
+const builtInJoinEstimatorFunctionNames = new Set([
+  "areajoinsel",
+  "contjoinsel",
+  "eqjoinsel",
+  "iclikejoinsel",
+  "icnlikejoinsel",
+  "likejoinsel",
+  "matchingjoinsel",
+  "neqjoinsel",
+  "nlikejoinsel",
+  "positionjoinsel",
+  "scalarltjoinsel",
+  "scalargtjoinsel",
+]);
+
+const builtInEstimatorFunctionNamesByOption = new Map([
+  ["restrict", builtInRestrictEstimatorFunctionNames],
+  ["join", builtInJoinEstimatorFunctionNames],
 ]);
 
 const builtInOperatorImplementationFunctionSignatures = new Map<
@@ -2289,9 +2422,11 @@ const operatorEstimatorFunctionArgs = (
 
 const isBuiltInOperatorEstimatorFunctionName = (
   nameParts: string[],
+  optionName: string,
 ): boolean => {
   const name = nameParts.at(-1)?.toLowerCase();
-  if (!name || !builtInOperatorEstimatorFunctionNames.has(name)) {
+  const builtInNames = builtInEstimatorFunctionNamesByOption.get(optionName);
+  if (!name || builtInNames?.has(name) !== true) {
     return false;
   }
 
@@ -2377,7 +2512,10 @@ const extractCreateOperatorDependencies = (
         const exactEstimatorFunctionRef =
           markExactSignatureRef(estimatorFunctionRef);
         if (
-          isBuiltInOperatorEstimatorFunctionName(estimatorFunctionNameParts)
+          isBuiltInOperatorEstimatorFunctionName(
+            estimatorFunctionNameParts,
+            optionName,
+          )
         ) {
           if (estimatorFunctionNameParts.length === 1) {
             requires.push(
@@ -2590,6 +2728,7 @@ const extractCreateOperatorClassDependencies = (
 
     const itemName = asRecord(item.name);
     const nameParts = extractNameParts(itemName?.objname);
+    const itemNumber = typeof item.number === "number" ? item.number : -1;
 
     if (item.itemtype === OPCLASS_ITEM_OPERATOR) {
       const explicitOperatorArgs = objectWithArgsTypeRefs(itemName);
@@ -2626,6 +2765,8 @@ const extractCreateOperatorClassDependencies = (
           nameParts,
           operatorArgs,
           dataTypeRef,
+          accessMethod,
+          itemNumber,
           context,
         )
       ) {
@@ -2663,6 +2804,8 @@ const extractCreateOperatorClassDependencies = (
         isBuiltInOperatorClassSupportFunctionName(
           nameParts,
           functionArgs,
+          accessMethod,
+          itemNumber,
           context,
         )
       ) {

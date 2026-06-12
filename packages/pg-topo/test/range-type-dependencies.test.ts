@@ -806,6 +806,53 @@ describe("range type dependencies", () => {
     expect(operatorIndex).toBeGreaterThan(operatorFunctionIndex);
   }, 120000);
 
+  test("requires estimator names in the matching restrict or join slot", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.=== (function = texteq, leftarg = text, rightarg = text, restrict = eqjoinsel, join = eqsel);",
+      "create schema app;",
+    ]);
+    const invalidRestrictEstimator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "eqjoinsel" &&
+            ref.signature === "(internal,oid,internal,int4)",
+        ) === true,
+    );
+    const invalidJoinEstimator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "eqsel" &&
+            ref.signature === "(internal,oid,internal,int2,internal)",
+        ) === true,
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.==="),
+    );
+
+    expect(invalidRestrictEstimator).toHaveLength(1);
+    expect(invalidJoinEstimator).toHaveLength(1);
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "eqjoinsel",
+      signature: "(internal,oid,internal,int4)",
+    });
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "eqsel",
+      signature: "(internal,oid,internal,int2,internal)",
+    });
+  });
+
   test("does not require producer statements for built-in text operator implementation functions", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = int4eq, leftarg = int4, rightarg = int4);",
@@ -2317,6 +2364,55 @@ describe("range type dependencies", () => {
     expect(executionErrors).toHaveLength(0);
   }, 120000);
 
+  test("requires pg_catalog support functions in the matching access method slots", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.invalid_hash_as_btree_ops for type int4 using btree as operator 1 < (int4, int4), function 1 hashint4(int4), function 2 btint4cmp(int4, int4);",
+      "create schema app;",
+    ]);
+    const hashFunctionInBtreeCompareSlot = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "hashint4" &&
+            ref.signature === "(public.int4)",
+        ) === true,
+    );
+    const compareFunctionInBtreeSortSupportSlot = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "btint4cmp" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.invalid_hash_as_btree_ops"),
+    );
+
+    expect(hashFunctionInBtreeCompareSlot).toHaveLength(1);
+    expect(compareFunctionInBtreeSortSupportSlot).toHaveLength(1);
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "hashint4",
+      signature: "(public.int4)",
+    });
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "btint4cmp",
+      signature: "(public.int4,public.int4)",
+    });
+  });
+
   test("does not require producers for pg_catalog text hash support functions", async () => {
     const result = await analyzeAndSort([
       "create operator class app.text_hash_ops for type text using hash as operator 1 = (text, text), function 1 hashtext(text);",
@@ -2552,6 +2648,26 @@ describe("range type dependencies", () => {
     expect(executionErrors).toHaveLength(0);
   }, 120000);
 
+  test("accepts explicit range opclasses with binary-coercible subtype inputs", async () => {
+    const result = await analyzeAndSort([
+      "create type app.varchar_range as range (subtype = varchar, subtype_opclass = pg_catalog.text_ops);",
+      "create type app.cidr_range as range (subtype = cidr, subtype_opclass = pg_catalog.inet_ops);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+
+    expect(unresolved).toHaveLength(0);
+
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+
+    expect(executionErrors).toHaveLength(0);
+  }, 120000);
+
   test("accepts explicit range opclasses through domain base types", async () => {
     const result = await analyzeAndSort([
       "create type app.price_range as range (subtype = app.price, subtype_opclass = numeric_ops);",
@@ -2604,6 +2720,37 @@ describe("range type dependencies", () => {
     expect(unresolvedPatternOperators).toHaveLength(0);
     expect(executionErrors).toHaveLength(0);
   }, 120000);
+
+  test("requires pg_catalog support operators in the matching access method slots", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.invalid_int4_hash_ops for type int4 using hash as operator 1 < (int4, int4), function 1 hashint4(int4);",
+      "create schema app;",
+    ]);
+    const invalidHashOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "<" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.invalid_int4_hash_ops"),
+    );
+
+    expect(invalidHashOperator).toHaveLength(1);
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "operator",
+      schema: "public",
+      name: "<",
+      signature: "(public.int4,public.int4)",
+    });
+  });
 
   test("requires non-pattern support operators with pattern names", async () => {
     const result = await analyzeAndSort([

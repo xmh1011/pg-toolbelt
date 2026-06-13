@@ -5359,6 +5359,163 @@ describe("range type dependencies", () => {
     expect(executionErrors).toHaveLength(0);
   }, 120000);
 
+  test("preserves explicitly catalog-qualified range callback argument signatures", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = pg_catalog.int4, subtype_diff = app.diff);",
+      "create function app.diff(a public.int4, b public.int4) returns float8 language sql immutable as $$ select 0::float8 $$;",
+      "create type public.int4 as (value integer);",
+      "create schema app;",
+    ]);
+    const unresolvedDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+        ) === true,
+    );
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.int_range"),
+    );
+
+    expect(unresolvedDiff).toHaveLength(1);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "diff",
+      signature: "(pg_catalog.int4,pg_catalog.int4)",
+    });
+  });
+
+  test("matches external range provider default multirange types in polymorphic opclasses", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create type app.wrap as range (subtype = app.period_multirange, subtype_opclass = pg_catalog.multirange_ops);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "type",
+            schema: "app",
+            name: "period",
+            signature: "(range)",
+          },
+        ],
+      },
+    );
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+
+    expect(unresolved).toHaveLength(0);
+  });
+
+  test("accepts built-in text concatenation operator callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.|| (function = textcat, leftarg = text, rightarg = text);",
+      "create schema app;",
+    ]);
+    const unresolvedTextcat = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "textcat" &&
+            ref.signature === "(text,text)",
+        ) === true,
+    );
+
+    expect(unresolvedTextcat).toHaveLength(0);
+  });
+
+  test("accepts catalog array typnames for polymorphic range opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_array_range as range (subtype = pg_catalog._int4, subtype_opclass = pg_catalog.array_ops);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+
+    expect(unresolved).toHaveLength(0);
+  });
+
+  test("diagnoses invalid pg_catalog operator argument types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator app.=== (function = app.eq, leftarg = pg_catalog.no_such, rightarg = int4);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "eq",
+            signature: "(pg_catalog.no_such,int4)",
+          },
+        ],
+      },
+    );
+    const missingArgumentType = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "no_such",
+        ) === true,
+    );
+
+    expect(missingArgumentType).toHaveLength(1);
+  });
+
+  test("accepts built-in GIN array support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.array_gin_ops for type anyarray using gin as operator 1 && (anyarray, anyarray);",
+      "create schema app;",
+    ]);
+    const unresolvedArrayOverlap = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "&&" &&
+            ref.signature === "(anyarray,anyarray)",
+        ) === true,
+    );
+
+    expect(unresolvedArrayOverlap).toHaveLength(0);
+  });
+
+  test("diagnoses invalid pg_catalog operator class data types", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.bad_ops for type pg_catalog.no_such using gist as operator 1 << (box, box);",
+      "create schema app;",
+    ]);
+    const missingDataType = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "no_such",
+        ) === true,
+    );
+
+    expect(missingDataType).toHaveLength(1);
+  });
+
   test("does not require built-in schemas for operator link refs", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = int4eq, leftarg = int4, rightarg = int4, commutator = operator(pg_catalog.=), negator = operator(information_schema.<>));",

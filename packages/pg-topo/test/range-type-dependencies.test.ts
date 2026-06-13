@@ -4872,6 +4872,26 @@ describe("range type dependencies", () => {
     expect(unresolvedBrinMinmax).toHaveLength(0);
   });
 
+  test("does not require producers for unqualified BRIN minmax support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_brin_ops for type int4 using brin as function 1 brin_minmax_opcinfo(internal);",
+      "create schema app;",
+    ]);
+    const unresolvedBrinMinmax = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "brin_minmax_opcinfo" &&
+            ref.signature === "(internal)",
+        ) === true,
+    );
+
+    expect(unresolvedBrinMinmax).toHaveLength(0);
+  });
+
   test("matches typmod input functions with array argument providers", async () => {
     const result = await analyzeAndSort([
       "create type app.widget (input = app.widget_in, output = app.widget_out, typmod_in = app.widget_typmod_in, typmod_out = app.widget_typmod_out, internallength = 4, alignment = int4);",
@@ -4983,6 +5003,32 @@ describe("range type dependencies", () => {
     expect(rangeCallback).toHaveLength(1);
     expect(opclassCallback).toHaveLength(1);
   });
+
+  test("matches exact callbacks with pg_catalog built-in type signatures", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = int4, subtype_diff = app.diff);",
+      "create function app.diff(a pg_catalog.int4, b pg_catalog.int4) returns float8 language sql immutable as $$ select (a - b)::float8 $$;",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolvedDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+
+    expect(unresolvedDiff).toHaveLength(0);
+    expect(executionErrors).toHaveLength(0);
+  }, 120000);
 
   test("does not require built-in schemas for operator link refs", async () => {
     const result = await analyzeAndSort([

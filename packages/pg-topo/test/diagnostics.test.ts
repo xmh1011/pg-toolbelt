@@ -197,6 +197,53 @@ describe("diagnostics", () => {
     expect(unrelatedDomainArray).toHaveLength(1);
   });
 
+  test("reports self references through generated array types", async () => {
+    const tableResult = await analyzeAndSort([
+      "create schema app;",
+      "create table app.events(parents app.events[]);",
+    ]);
+    const rangeResult = await analyzeAndSort([
+      "create schema app;",
+      "create type app.r as range (subtype = app.r[]);",
+    ]);
+    const domainResult = await analyzeAndSort([
+      "create schema app;",
+      "create domain app.email_domain as app.email_domain[];",
+    ]);
+    const selfTableArray = tableResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "events[]",
+        ) === true,
+    );
+    const selfRangeArray = rangeResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" && ref.schema === "app" && ref.name === "r[]",
+        ) === true,
+    );
+    const selfDomainArray = domainResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "email_domain[]",
+        ) === true,
+    );
+
+    expect(selfTableArray).toHaveLength(1);
+    expect(selfRangeArray).toHaveLength(1);
+    expect(selfDomainArray).toHaveLength(1);
+  });
+
   test("external operator class providers satisfy omitted range subtype defaults", async () => {
     const sql = [
       "create schema app;",
@@ -299,6 +346,38 @@ describe("diagnostics", () => {
     );
 
     expect(missingDefault).toHaveLength(1);
+  });
+
+  test("external operator class providers satisfy identity comment signatures", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create schema app;",
+        "comment on operator class app.ops using btree is 'external';",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "operator_class",
+            schema: "app",
+            name: "ops",
+            signature: "(btree,int4)",
+          },
+        ],
+      },
+    );
+    const unresolvedOperatorClass = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_class" &&
+            ref.schema === "app" &&
+            ref.name === "ops" &&
+            ref.signature === "(btree)",
+        ) === true,
+    );
+
+    expect(unresolvedOperatorClass).toHaveLength(0);
   });
 
   test("externalProviders with signature mismatch uses compatibility (e.g. timezone)", async () => {

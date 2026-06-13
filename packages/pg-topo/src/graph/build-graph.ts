@@ -83,6 +83,12 @@ const sqlExcerpt = (sql: string, maxLength = 80): string => {
 const statementLabel = (node: StatementNode): string =>
   `${node.id.filePath}:${node.id.statementIndex}${node.id.sourceOffset != null ? `@${node.id.sourceOffset}` : ""} (${sqlExcerpt(node.sql)})`;
 
+const relationRowTypeProviderKinds = new Set([
+  "table",
+  "view",
+  "materialized_view",
+]);
+
 const externalProviderSatisfies = (
   requiredRef: ObjectRef,
   externalByName: Map<string, ObjectRef[]>,
@@ -376,7 +382,9 @@ export const buildGraph = (
     for (const ref of externalProviders) {
       addExternalProvider(ref);
       if (
-        (ref.kind === "type" || ref.kind === "domain") &&
+        (ref.kind === "type" ||
+          ref.kind === "domain" ||
+          relationRowTypeProviderKinds.has(ref.kind)) &&
         !ref.name.endsWith("[]")
       ) {
         addExternalProvider({

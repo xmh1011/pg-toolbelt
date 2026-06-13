@@ -1004,6 +1004,15 @@ const polymorphicBuiltInTypeNames = new Set([
   "anyrange",
 ]);
 
+const normalizedTypeContextKey = (typeRef: ObjectRef): string =>
+  objectRefKey(
+    createObjectRefFromAst(
+      "type",
+      typeRef.name,
+      typeRef.schema ?? DEFAULT_SCHEMA,
+    ),
+  );
+
 const typeRefMatchesPolymorphicBuiltInName = (
   typeRef: ObjectRef | null,
   typeName: string,
@@ -1015,7 +1024,7 @@ const typeRefMatchesPolymorphicBuiltInName = (
 
   const normalizedTypeName = typeName.toLowerCase();
   const normalizedRefName = typeRef.name.toLowerCase();
-  const typeKey = objectRefKey(typeRef);
+  const typeKey = normalizedTypeContextKey(typeRef);
   if (
     normalizedTypeName === "anyarray" ||
     normalizedTypeName === "anycompatiblearray"
@@ -1204,9 +1213,102 @@ const builtInHashOperatorFamilyNames = new Set([
   "xid_ops",
 ]);
 
+const builtInBrinOperatorFamilyNames = new Set([
+  "bit_minmax_ops",
+  "box_inclusion_ops",
+  "bpchar_bloom_ops",
+  "bpchar_minmax_ops",
+  "bytea_bloom_ops",
+  "bytea_minmax_ops",
+  "char_bloom_ops",
+  "char_minmax_ops",
+  "datetime_bloom_ops",
+  "datetime_minmax_multi_ops",
+  "datetime_minmax_ops",
+  "float_bloom_ops",
+  "float_minmax_multi_ops",
+  "float_minmax_ops",
+  "integer_bloom_ops",
+  "integer_minmax_multi_ops",
+  "integer_minmax_ops",
+  "interval_bloom_ops",
+  "interval_minmax_multi_ops",
+  "interval_minmax_ops",
+  "macaddr8_bloom_ops",
+  "macaddr8_minmax_multi_ops",
+  "macaddr8_minmax_ops",
+  "macaddr_bloom_ops",
+  "macaddr_minmax_multi_ops",
+  "macaddr_minmax_ops",
+  "name_bloom_ops",
+  "name_minmax_ops",
+  "network_bloom_ops",
+  "network_inclusion_ops",
+  "network_minmax_multi_ops",
+  "network_minmax_ops",
+  "numeric_bloom_ops",
+  "numeric_minmax_multi_ops",
+  "numeric_minmax_ops",
+  "oid_bloom_ops",
+  "oid_minmax_multi_ops",
+  "oid_minmax_ops",
+  "pg_lsn_bloom_ops",
+  "pg_lsn_minmax_multi_ops",
+  "pg_lsn_minmax_ops",
+  "range_inclusion_ops",
+  "text_bloom_ops",
+  "text_minmax_ops",
+  "tid_bloom_ops",
+  "tid_minmax_multi_ops",
+  "tid_minmax_ops",
+  "time_bloom_ops",
+  "time_minmax_multi_ops",
+  "time_minmax_ops",
+  "timetz_bloom_ops",
+  "timetz_minmax_multi_ops",
+  "timetz_minmax_ops",
+  "uuid_bloom_ops",
+  "uuid_minmax_multi_ops",
+  "uuid_minmax_ops",
+  "varbit_minmax_ops",
+]);
+
+const builtInGinOperatorFamilyNames = new Set([
+  "array_ops",
+  "jsonb_ops",
+  "jsonb_path_ops",
+  "tsvector_ops",
+]);
+
+const builtInGistOperatorFamilyNames = new Set([
+  "box_ops",
+  "circle_ops",
+  "multirange_ops",
+  "network_ops",
+  "point_ops",
+  "poly_ops",
+  "range_ops",
+  "tsquery_ops",
+  "tsvector_ops",
+]);
+
+const builtInSpgistOperatorFamilyNames = new Set([
+  "box_ops",
+  "kd_point_ops",
+  "network_ops",
+  "poly_ops",
+  "quad_point_ops",
+  "range_ops",
+  "text_ops",
+]);
+
 const builtInOperatorFamilyNamesByAccessMethod = new Map([
   ["btree", builtInBtreeOperatorFamilyNames],
   ["hash", builtInHashOperatorFamilyNames],
+  ["brin", builtInBrinOperatorFamilyNames],
+  ["gin", builtInGinOperatorFamilyNames],
+  ["gist", builtInGistOperatorFamilyNames],
+  ["spgist", builtInSpgistOperatorFamilyNames],
 ]);
 
 const builtInOperatorFamilyNamesForAccessMethod = (
@@ -2071,15 +2173,7 @@ const addTypeKey = (typeKeys: Set<string>, typeRef: ObjectRef | null): void => {
   if (!typeRef) {
     return;
   }
-  typeKeys.add(
-    objectRefKey(
-      createObjectRefFromAst(
-        "type",
-        typeRef.name,
-        typeRef.schema ?? DEFAULT_SCHEMA,
-      ),
-    ),
-  );
+  typeKeys.add(normalizedTypeContextKey(typeRef));
 };
 
 export const createExtractionContext = (
@@ -2607,6 +2701,10 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int2gt", [["int2", "int2"]]],
   ["int2le", [["int2", "int2"]]],
   ["int2lt", [["int2", "int2"]]],
+  ["int2pl", [["int2", "int2"]]],
+  ["int2mi", [["int2", "int2"]]],
+  ["int2mul", [["int2", "int2"]]],
+  ["int2div", [["int2", "int2"]]],
   ["int2ne", [["int2", "int2"]]],
   ["int2um", [["int2"]]],
   ["int4eq", [["int4", "int4"]]],
@@ -2615,6 +2713,9 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int4le", [["int4", "int4"]]],
   ["int4lt", [["int4", "int4"]]],
   ["int4pl", [["int4", "int4"]]],
+  ["int4mi", [["int4", "int4"]]],
+  ["int4mul", [["int4", "int4"]]],
+  ["int4div", [["int4", "int4"]]],
   ["int4ne", [["int4", "int4"]]],
   ["int4um", [["int4"]]],
   ["int8eq", [["int8", "int8"]]],
@@ -2622,6 +2723,10 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int8gt", [["int8", "int8"]]],
   ["int8le", [["int8", "int8"]]],
   ["int8lt", [["int8", "int8"]]],
+  ["int8pl", [["int8", "int8"]]],
+  ["int8mi", [["int8", "int8"]]],
+  ["int8mul", [["int8", "int8"]]],
+  ["int8div", [["int8", "int8"]]],
   ["int8ne", [["int8", "int8"]]],
   ["int8um", [["int8"]]],
   ["interval_eq", [["interval", "interval"]]],
@@ -3377,17 +3482,27 @@ const extractCreateBaseTypeDependencies = (
 
     const optionName = defElem.defname.toLowerCase();
     if (baseTypeTypeOptionNames.has(optionName)) {
-      const typeRef = typeFromTypeNameNode(asRecord(defElem.arg)?.TypeName);
-      if (typeRef) {
-        requires.push(typeRef);
+      const optionTypeRef = typeFromTypeNameNode(
+        asRecord(defElem.arg)?.TypeName,
+      );
+      if (optionTypeRef) {
+        requires.push(optionTypeRef);
+        if (typeRef && isSelfTypeReference(typeRef, optionTypeRef)) {
+          diagnostics.push(
+            selfReferenceDiagnostic(
+              optionTypeRef,
+              `Base type '${typeRef.schema ? `${typeRef.schema}.` : ""}${typeRef.name}' cannot use itself for option '${optionName}'.`,
+            ),
+          );
+        }
         if (
-          typeRef.schema === "pg_catalog" &&
-          !isKnownBuiltInTypeName(typeRef.name)
+          optionTypeRef.schema === "pg_catalog" &&
+          !isKnownBuiltInTypeName(optionTypeRef.name)
         ) {
           diagnostics.push({
             code: "UNRESOLVED_DEPENDENCY",
-            message: `No valid pg_catalog base type option type '${typeRef.name}' found for option '${optionName}'.`,
-            objectRefs: [typeRef],
+            message: `No valid pg_catalog base type option type '${optionTypeRef.name}' found for option '${optionName}'.`,
+            objectRefs: [optionTypeRef],
             suggestedFix:
               "Use a valid pg_catalog type or create the referenced type explicitly in a user schema.",
           });

@@ -3964,6 +3964,46 @@ describe("range type dependencies", () => {
     expect(invalidSupportRoutine).toHaveLength(1);
   });
 
+  test("diagnoses invalid qualified operator implementation callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<< (function = pg_catalog.date_lt, leftarg = int4, rightarg = int4);",
+      "create schema app;",
+    ]);
+    const invalidImplementation = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "date_lt" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+
+    expect(invalidImplementation).toHaveLength(1);
+  });
+
+  test("diagnoses invalid qualified operator class support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.invalid_int4_hash_ops for type int4 using hash as operator 1 pg_catalog.< (int4, int4), function 1 hashint4(int4);",
+      "create schema app;",
+    ]);
+    const invalidSupportOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "<" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+
+    expect(invalidSupportOperator).toHaveLength(1);
+  });
+
   test("accepts binary-compatible local range opclasses", async () => {
     const result = await analyzeAndSort([
       "create type app.varchar_range as range (subtype = varchar, subtype_opclass = app.text_ops);",

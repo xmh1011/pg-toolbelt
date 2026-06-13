@@ -3944,6 +3944,124 @@ describe("range type dependencies", () => {
     expect(unresolved).toHaveLength(0);
   });
 
+  test("diagnoses invalid pg_catalog operator class support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.bad_int4_ops for type int4 using btree as operator 1 < (int4, int4), function 1 pg_catalog.hashint4(int4);",
+      "create schema app;",
+    ]);
+    const invalidSupportRoutine = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "hashint4" &&
+            ref.signature === "(public.int4)",
+        ) === true,
+    );
+
+    expect(invalidSupportRoutine).toHaveLength(1);
+  });
+
+  test("accepts binary-compatible local range opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create type app.varchar_range as range (subtype = varchar, subtype_opclass = app.text_ops);",
+      "create operator class app.text_ops for type text using btree as operator 1 < (text, text), operator 2 <= (text, text), operator 3 = (text, text), operator 4 >= (text, text), operator 5 > (text, text), function 1 bttextcmp(text, text);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.varchar_range"),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const operatorClassIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator class app.text_ops"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.varchar_range"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "operator_class",
+      schema: "app",
+      name: "text_ops",
+      signature: "(btree,varchar)",
+    });
+    expect(operatorClassIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(operatorClassIndex);
+  });
+
+  test("orders schema-qualified range subtypes before shadowing built-in names", async () => {
+    const result = await analyzeAndSort([
+      "create type app.range_over_int4 as range (subtype = app.int4);",
+      "create type app.int4 as enum ('one', 'two');",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.range_over_int4"),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const subtypeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.int4 as enum"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.range_over_int4"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "int4",
+    });
+    expect(subtypeIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(subtypeIndex);
+  });
+
+  test("reports duplicate operator class names per schema and access method", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.shared_ops for type int4 using btree as operator 1 < (int4, int4), function 1 btint4cmp(int4, int4);",
+      "create operator class app.shared_ops for type text using btree as operator 1 < (text, text), function 1 bttextcmp(text, text);",
+      "create schema app;",
+    ]);
+    const duplicateOperatorClasses = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "DUPLICATE_PRODUCER" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_class" &&
+            ref.schema === "app" &&
+            ref.name === "shared_ops" &&
+            ref.signature === "(btree)",
+        ) === true,
+    );
+
+    expect(duplicateOperatorClasses.length).toBeGreaterThan(0);
+  });
+
+  test("accepts built-in hash name_ops operator families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.name_hash_ops for type name using hash family pg_catalog.name_ops as operator 1 = (name, name), function 1 hashname(name);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+
+    expect(unresolved).toHaveLength(0);
+  });
+
   test("matches typmod input functions with array argument providers", async () => {
     const result = await analyzeAndSort([
       "create type app.widget (input = app.widget_in, output = app.widget_out, typmod_in = app.widget_typmod_in, typmod_out = app.widget_typmod_out, internallength = 4, alignment = int4);",

@@ -939,6 +939,18 @@ const isBuiltInRangeSupportFunctionName = (
   );
 };
 
+const isPgCatalogQualifiedKnownRangeSupportFunctionName = (
+  nameParts: string[],
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  return (
+    nameParts.length === 2 &&
+    nameParts[0]?.toLowerCase() === "pg_catalog" &&
+    name !== undefined &&
+    builtInRangeSupportFunctionSignatures.has(name)
+  );
+};
+
 const polymorphicBuiltInTypeNames = new Set([
   "any",
   "anyarray",
@@ -1486,6 +1498,14 @@ const builtInPatternOperatorClassSupportOperatorNames = new Set([
   "~>~",
 ]);
 
+const builtInRecordImageOperatorClassSupportOperatorNames = new Set([
+  "*<",
+  "*<=",
+  "*=",
+  "*>=",
+  "*>",
+]);
+
 const builtInBtreeOperatorStrategies = new Map([
   ["<", 1],
   ["<=", 2],
@@ -1501,6 +1521,14 @@ const builtInBtreePatternOperatorStrategies = new Map([
   ["~>~", 5],
 ]);
 
+const builtInBtreeRecordImageOperatorStrategies = new Map([
+  ["*<", 1],
+  ["*<=", 2],
+  ["*=", 3],
+  ["*>=", 4],
+  ["*>", 5],
+]);
+
 const builtInOperatorClassSupportOperatorMatchesSlot = (
   name: string,
   accessMethod: string,
@@ -1510,7 +1538,8 @@ const builtInOperatorClassSupportOperatorMatchesSlot = (
   if (normalizedAccessMethod === "btree") {
     return (
       builtInBtreeOperatorStrategies.get(name) === strategyNumber ||
-      builtInBtreePatternOperatorStrategies.get(name) === strategyNumber
+      builtInBtreePatternOperatorStrategies.get(name) === strategyNumber ||
+      builtInBtreeRecordImageOperatorStrategies.get(name) === strategyNumber
     );
   }
 
@@ -1530,12 +1559,22 @@ const builtInBtreeSupportOperatorTypeNames = new Set(
   [...builtInRangeOperatorClassSubtypes.values()].flat(),
 );
 
+const builtInHashOnlySupportOperatorTypeNames = new Set([
+  "aclitem",
+  "cid",
+  "xid",
+]);
+
 const typeRefMatchesBuiltInSupportOperatorType = (
   typeRef: ObjectRef | null,
   context: ExtractionContext,
+  accessMethod: string,
 ): boolean =>
   typeRefMatchesBuiltInNames(typeRef, [
     ...builtInBtreeSupportOperatorTypeNames,
+    ...(accessMethod.toLowerCase() === "hash"
+      ? builtInHashOnlySupportOperatorTypeNames
+      : []),
   ]) ||
   typeRefMatchesPolymorphicBuiltInName(typeRef, "anyarray", context) ||
   typeRefMatchesPolymorphicBuiltInName(typeRef, "anyenum", context) ||
@@ -1558,7 +1597,8 @@ const isBuiltInOperatorClassSupportOperatorName = (
       )) ||
     !name ||
     (!builtInOperatorClassSupportOperatorNames.has(name) &&
-      !builtInPatternOperatorClassSupportOperatorNames.has(name))
+      !builtInPatternOperatorClassSupportOperatorNames.has(name) &&
+      !builtInRecordImageOperatorClassSupportOperatorNames.has(name))
   ) {
     return false;
   }
@@ -1587,10 +1627,25 @@ const isBuiltInOperatorClassSupportOperatorName = (
     );
   }
 
+  if (builtInRecordImageOperatorClassSupportOperatorNames.has(name)) {
+    if (args.length === 0) {
+      return typeRefMatchesBuiltInNames(operatorClassDataTypeRef, ["record"]);
+    }
+
+    const leftArg = args[0] ?? null;
+    const rightArg = args[1] ?? null;
+    return (
+      args.length === 2 &&
+      objectRefsSameObject(leftArg, rightArg) &&
+      typeRefMatchesBuiltInNames(leftArg, ["record"])
+    );
+  }
+
   if (args.length === 0) {
     return typeRefMatchesBuiltInSupportOperatorType(
       operatorClassDataTypeRef,
       context,
+      accessMethod,
     );
   }
 
@@ -1600,7 +1655,11 @@ const isBuiltInOperatorClassSupportOperatorName = (
     return false;
   }
 
-  return typeRefMatchesBuiltInSupportOperatorType(leftArg, context);
+  return typeRefMatchesBuiltInSupportOperatorType(
+    leftArg,
+    context,
+    accessMethod,
+  );
 };
 
 const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
@@ -2148,6 +2207,17 @@ const extractCreateRangeDependencies = (
         }
 
         requires.push(exactFunctionRef);
+        if (
+          isPgCatalogQualifiedKnownRangeSupportFunctionName(functionNameParts)
+        ) {
+          diagnostics.push({
+            code: "UNRESOLVED_DEPENDENCY",
+            message: `No valid pg_catalog range support function '${functionRef.name}' found for range option '${optionName}'.`,
+            objectRefs: [exactFunctionRef],
+            suggestedFix:
+              "Use a pg_catalog range support function whose signature matches the selected range option and subtype.",
+          });
+        }
       }
     }
   }
@@ -2452,6 +2522,19 @@ const isBuiltInOperatorEstimatorFunctionName = (
   );
 };
 
+const isPgCatalogQualifiedKnownOperatorEstimatorFunctionName = (
+  nameParts: string[],
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  return (
+    nameParts.length === 2 &&
+    nameParts[0]?.toLowerCase() === "pg_catalog" &&
+    name !== undefined &&
+    (builtInRestrictEstimatorFunctionNames.has(name) ||
+      builtInJoinEstimatorFunctionNames.has(name))
+  );
+};
+
 const isBuiltInOperatorImplementationFunctionName = (
   nameParts: string[],
   args: (ObjectRef | null)[],
@@ -2486,6 +2569,7 @@ const extractCreateOperatorDependencies = (
 ): ExtractDependenciesResult => {
   const provides: ObjectRef[] = [];
   const requires: ObjectRef[] = [];
+  const diagnostics: Diagnostic[] = [];
 
   const operatorRef = objectFromNameParts(
     "operator",
@@ -2542,6 +2626,19 @@ const extractCreateOperatorDependencies = (
         }
 
         requires.push(exactEstimatorFunctionRef);
+        if (
+          isPgCatalogQualifiedKnownOperatorEstimatorFunctionName(
+            estimatorFunctionNameParts,
+          )
+        ) {
+          diagnostics.push({
+            code: "UNRESOLVED_DEPENDENCY",
+            message: `No valid pg_catalog operator estimator '${estimatorFunctionRef.name}' found for option '${optionName}'.`,
+            objectRefs: [exactEstimatorFunctionRef],
+            suggestedFix:
+              "Use a pg_catalog estimator whose signature matches the selected RESTRICT or JOIN option.",
+          });
+        }
       }
       continue;
     }
@@ -2614,7 +2711,7 @@ const extractCreateOperatorDependencies = (
     }
   }
 
-  return { provides, requires };
+  return { provides, requires, diagnostics };
 };
 
 const OPCLASS_ITEM_OPERATOR = 1;

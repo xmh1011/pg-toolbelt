@@ -30,6 +30,37 @@ export type GraphState = {
   diagnostics: Diagnostic[];
 };
 
+const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
+const textEncoder = new TextEncoder();
+
+const clipPostgresIdentifier = (
+  identifier: string,
+  maxBytes = POSTGRES_IDENTIFIER_MAX_BYTES,
+): string => {
+  let clipped = "";
+  let byteLength = 0;
+
+  for (const char of identifier) {
+    const charLength = textEncoder.encode(char).length;
+    if (byteLength + charLength > maxBytes) {
+      break;
+    }
+    clipped += char;
+    byteLength += charLength;
+  }
+
+  return clipped;
+};
+
+const defaultMultirangeTypeName = (rangeTypeName: string): string =>
+  rangeTypeName.includes("range")
+    ? clipPostgresIdentifier(rangeTypeName.replace("range", "multirange"))
+    : `${clipPostgresIdentifier(
+        rangeTypeName,
+        POSTGRES_IDENTIFIER_MAX_BYTES -
+          textEncoder.encode("_multirange").length,
+      )}_multirange`;
+
 const edgeKey = (fromIndex: number, toIndex: number): string =>
   `${fromIndex}->${toIndex}`;
 
@@ -391,6 +422,23 @@ export const buildGraph = (
           kind: "type",
           schema: ref.schema,
           name: `${ref.name}[]`,
+        });
+      }
+      if (
+        ref.kind === "type" &&
+        ref.signature?.trim().toLowerCase() === "(range)"
+      ) {
+        const multirangeTypeName = defaultMultirangeTypeName(ref.name);
+        addExternalProvider({
+          kind: "type",
+          schema: ref.schema,
+          name: multirangeTypeName,
+          signature: "(multirange)",
+        });
+        addExternalProvider({
+          kind: "type",
+          schema: ref.schema,
+          name: `${multirangeTypeName}[]`,
         });
       }
     }

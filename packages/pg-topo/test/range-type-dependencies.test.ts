@@ -2921,7 +2921,7 @@ describe("range type dependencies", () => {
 
   test("does not require producers for built-in BRIN bloom equality operators", async () => {
     const result = await analyzeAndSort([
-      "create operator class app.int4_brin_bloom_ops for type int4 using brin family pg_catalog.integer_bloom_ops as operator 1 = (int4, int4), function 1 brin_bloom_opcinfo(internal);",
+      "create operator class app.int4_brin_bloom_ops for type int4 using brin as operator 1 = (int4, int4), function 1 brin_bloom_opcinfo(internal);",
       "create schema app;",
     ]);
     const validation = await validateAnalyzeResultWithPostgres(result);

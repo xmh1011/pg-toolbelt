@@ -1383,7 +1383,10 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["btboolcmp", [["bool", "bool"]]],
   ["btbpchar_pattern_cmp", [["bpchar", "bpchar"]]],
   ["btbpchar_pattern_sortsupport", [["internal"]]],
+  ["brin_bloom_opcinfo", [["internal"]]],
+  ["brin_inclusion_opcinfo", [["internal"]]],
   ["brin_minmax_opcinfo", [["internal"]]],
+  ["brin_minmax_multi_opcinfo", [["internal"]]],
   ["btcharcmp", [["char", "char"]]],
   ["btequalimage", [["oid"]]],
   ["btfloat4cmp", [["float4", "float4"]]],
@@ -1539,6 +1542,13 @@ const isHashSupportFunctionName = (name: string): boolean =>
 const isHashExtendedSupportFunctionName = (name: string): boolean =>
   isHashSupportFunctionName(name) && name.endsWith("extended");
 
+const builtInBrinSupportFunctionNames = new Set([
+  "brin_bloom_opcinfo",
+  "brin_inclusion_opcinfo",
+  "brin_minmax_opcinfo",
+  "brin_minmax_multi_opcinfo",
+]);
+
 const builtInOperatorClassSupportFunctionMatchesSlot = (
   name: string,
   signature: string[],
@@ -1603,7 +1613,7 @@ const builtInOperatorClassSupportFunctionMatchesSlot = (
       supportNumber === 1 &&
       signature.length === 1 &&
       signature[0] === "internal" &&
-      name === "brin_minmax_opcinfo"
+      builtInBrinSupportFunctionNames.has(name)
     );
   }
 
@@ -1796,6 +1806,10 @@ const builtInOperatorClassSupportOperatorMatchesSlot = (
   }
 
   if (normalizedAccessMethod === "brin") {
+    if (name === "=" && strategyNumber === 1) {
+      return true;
+    }
+
     return builtInBtreeOperatorStrategies.get(name) === strategyNumber;
   }
 
@@ -1984,6 +1998,15 @@ const defaultMultirangeTypeName = (rangeTypeName: string): string =>
         POSTGRES_IDENTIFIER_MAX_BYTES -
           textEncoder.encode("_multirange").length,
       )}_multirange`;
+
+const isRangeSelfTypeReference = (
+  rangeRef: ObjectRef,
+  requiredTypeRef: ObjectRef,
+): boolean =>
+  isSelfTypeReference(rangeRef, requiredTypeRef) ||
+  (requiredTypeRef.kind === "type" &&
+    requiredTypeRef.schema === rangeRef.schema &&
+    requiredTypeRef.name === defaultMultirangeTypeName(rangeRef.name));
 
 const baseTypeFunctionOptionNames = new Set([
   "input",
@@ -2445,7 +2468,7 @@ const extractCreateRangeDependencies = (
       const typeRef = typeFromTypeNameNode(typeName);
       if (typeRef) {
         requires.push(typeRef);
-        if (rangeRef && isSelfTypeReference(rangeRef, typeRef)) {
+        if (rangeRef && isRangeSelfTypeReference(rangeRef, typeRef)) {
           diagnostics.push(
             selfReferenceDiagnostic(
               typeRef,

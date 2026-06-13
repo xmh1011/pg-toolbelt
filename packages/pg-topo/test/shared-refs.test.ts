@@ -6,6 +6,7 @@ import {
   keyRefForTableColumns,
   objectFromNameParts,
   objectKindFromObjType,
+  parseNamedObjectRef,
   relationFromRangeVarNode,
   typeFromTypeNameNode,
 } from "../src/extract/shared-refs";
@@ -80,6 +81,48 @@ describe("objectFromNameParts", () => {
   test("returns ref for multi-part (schema.name)", () => {
     const ref = objectFromNameParts("table", ["app", "users"], "public");
     expect(ref).toEqual({ kind: "table", name: "users", schema: "app" });
+  });
+
+  test("preserves operator class and family access methods", () => {
+    const operatorClassRef = parseNamedObjectRef(
+      {
+        List: {
+          items: [
+            { String: { sval: "btree" } },
+            { String: { sval: "app" } },
+            { String: { sval: "score_ops" } },
+          ],
+        },
+      },
+      "operator_class",
+    );
+    const operatorFamilyRef = parseNamedObjectRef(
+      {
+        List: {
+          items: [
+            { String: { sval: "hash" } },
+            { String: { sval: "app" } },
+            { String: { sval: "score_ops" } },
+          ],
+        },
+      },
+      "operator_family",
+    );
+
+    expect(operatorClassRef).toMatchObject({
+      kind: "operator_class",
+      name: "score_ops",
+      schema: "app",
+      signature: "(btree)",
+    });
+    expect(operatorClassRef?.explicitSchema).toBe(true);
+    expect(operatorFamilyRef).toMatchObject({
+      kind: "operator_family",
+      name: "score_ops",
+      schema: "app",
+      signature: "(hash)",
+    });
+    expect(operatorFamilyRef?.explicitSchema).toBe(true);
   });
 
   test("trigger and policy use relation.objectName identity so COMMENT ON resolves to CREATE", () => {

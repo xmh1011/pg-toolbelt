@@ -138,6 +138,27 @@ describe("diagnostics", () => {
     expect(unresolvedWith.length).toBeLessThan(unresolvedWithout.length);
   });
 
+  test("external base type providers satisfy generated array type requirements", async () => {
+    const result = await analyzeAndSort(
+      ["create schema app;", "create table app.events(values app.score[]);"],
+      {
+        externalProviders: [{ kind: "type", schema: "app", name: "score" }],
+      },
+    );
+    const unresolvedArrayType = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "score[]",
+        ) === true,
+    );
+
+    expect(unresolvedArrayType).toHaveLength(0);
+  });
+
   test("external operator class providers satisfy omitted range subtype defaults", async () => {
     const sql = [
       "create schema app;",

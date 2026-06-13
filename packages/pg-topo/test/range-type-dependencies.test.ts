@@ -4689,4 +4689,105 @@ describe("range type dependencies", () => {
       signature: "(app.score[],app.score[])",
     });
   });
+
+  test("requires range and opclass callbacks to be functions", async () => {
+    const rangeResult = await analyzeAndSort([
+      "create type app.bad_range as range (subtype = int4, subtype_diff = app.diff);",
+      "create procedure app.diff(a int4, b int4) language sql as $$ select 1 $$;",
+      "create schema app;",
+    ]);
+    const opclassResult = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using btree as function 1 app.score_cmp(app.score, app.score);",
+      "create procedure app.score_cmp(a app.score, b app.score) language sql as $$ select 1 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const rangeCallback = rangeResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+    const opclassCallback = opclassResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_cmp" &&
+            ref.signature === "(app.score,app.score)",
+        ) === true,
+    );
+
+    expect(rangeCallback).toHaveLength(1);
+    expect(opclassCallback).toHaveLength(1);
+  });
+
+  test("does not require built-in schemas for operator link refs", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.=== (function = int4eq, leftarg = int4, rightarg = int4, commutator = operator(pg_catalog.=), negator = operator(information_schema.<>));",
+      "create schema app;",
+    ]);
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.==="),
+    );
+    const builtInSchemaDiagnostics = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "schema" &&
+            (ref.name === "pg_catalog" || ref.name === "information_schema"),
+        ) === true,
+    );
+
+    expect(operatorStatement?.requires).not.toContainEqual({
+      kind: "schema",
+      name: "pg_catalog",
+    });
+    expect(operatorStatement?.requires).not.toContainEqual({
+      kind: "schema",
+      name: "information_schema",
+    });
+    expect(builtInSchemaDiagnostics).toHaveLength(0);
+  });
+
+  test("requires explicit support operator argument type refs", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator class app.score_ops for type app.score using btree as operator 1 app.< (app.other, app.other), function 1 app.score_cmp(app.score, app.score);",
+        "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select case when (a).value < (b).value then -1 when (a).value > (b).value then 1 else 0 end $$;",
+        "create type app.other as (value int4);",
+        "create type app.score as (value int4);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "operator",
+            schema: "app",
+            name: "<",
+            signature: "(app.other,app.other)",
+          },
+        ],
+      },
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "other",
+    });
+  });
 });

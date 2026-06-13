@@ -35,22 +35,78 @@ export const isKindCompatible = (
   return requiredKind === providedKind;
 };
 
-const signatureArgs = (signature?: string): string[] | null => {
+type ParsedSignature = {
+  args: string[];
+  returnType?: string;
+};
+
+const findReturnTypeSeparator = (value: string): number => {
+  let depth = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const char = value[index] ?? "";
+    const nextChar = value[index + 1] ?? "";
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (inQuotes) {
+      continue;
+    }
+
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ")" && depth > 0) {
+      depth -= 1;
+      continue;
+    }
+
+    if (depth === 0 && char === "-" && nextChar === ">") {
+      return index;
+    }
+  }
+
+  return -1;
+};
+
+const parseSignature = (signature?: string): ParsedSignature | null => {
   if (typeof signature !== "string") {
     return null;
   }
 
   const trimmed = signature.trim();
-  if (!trimmed.startsWith("(") || !trimmed.endsWith(")")) {
+  const separatorIndex = findReturnTypeSeparator(trimmed);
+  const argsText =
+    separatorIndex >= 0 ? trimmed.slice(0, separatorIndex).trim() : trimmed;
+  const returnType =
+    separatorIndex >= 0 ? trimmed.slice(separatorIndex + 2).trim() : "";
+
+  if (!argsText.startsWith("(") || !argsText.endsWith(")")) {
     return null;
   }
 
-  const body = trimmed.slice(1, -1).trim();
+  const body = argsText.slice(1, -1).trim();
   if (body.length === 0) {
-    return [];
+    return returnType.length > 0 ? { args: [], returnType } : { args: [] };
   }
 
-  return splitTopLevel(body, ",").map((arg) => arg.trim());
+  const args = splitTopLevel(body, ",").map((arg) => arg.trim());
+  return returnType.length > 0 ? { args, returnType } : { args };
+};
+
+const signatureArgs = (signature?: string): string[] | null => {
+  const parsed = parseSignature(signature);
+  return parsed?.args ?? null;
 };
 
 const normalizeSignatureArg = (value: string): string => {
@@ -337,10 +393,22 @@ export const signaturesCompatible = (
     return true;
   }
 
-  const requiredArgs = signatureArgs(requiredSignature);
-  const providedArgs = signatureArgs(providedSignature);
-  if (!requiredArgs || !providedArgs) {
+  const required = parseSignature(requiredSignature);
+  const provided = parseSignature(providedSignature);
+  if (!required || !provided) {
     return false;
+  }
+  const { args: requiredArgs } = required;
+  const { args: providedArgs } = provided;
+  if (required.returnType) {
+    if (!provided.returnType) {
+      return false;
+    }
+    if (
+      !signatureArgCompatible(required.returnType, provided.returnType, options)
+    ) {
+      return false;
+    }
   }
   if (
     options.requireExactArity &&

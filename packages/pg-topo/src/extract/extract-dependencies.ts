@@ -447,21 +447,32 @@ const extractCreateFunctionDependencies = (
   }
 
   const functionRef = objectFromNameParts(kind, functionNameParts);
+  const returnType = typeFromTypeNameNode(statementNode.returnType);
   if (functionRef) {
+    const argSignature = `(${signatureParts.join(",")})`;
     provides.push(
       createObjectRefFromAst(
         kind,
         functionRef.name,
         functionRef.schema,
-        `(${signatureParts.join(",")})`,
+        argSignature,
       ),
     );
+    if (returnType) {
+      provides.push(
+        createObjectRefFromAst(
+          kind,
+          functionRef.name,
+          functionRef.schema,
+          `${argSignature}->${typeSignaturePart(returnType)}`,
+        ),
+      );
+    }
     if (functionRef.schema) {
       requires.push(createObjectRefFromAst("schema", functionRef.schema));
     }
   }
 
-  const returnType = typeFromTypeNameNode(statementNode.returnType);
   if (returnType) {
     requires.push(returnType);
   }
@@ -2654,10 +2665,13 @@ const objectWithArgsTypeRefs = (
   );
 };
 
-const typeRefsSignature = (args: (ObjectRef | null)[]): string =>
+const typeRefsSignature = (
+  args: (ObjectRef | null)[],
+  returnType?: ObjectRef | null,
+): string =>
   `(${args
     .map((argRef) => (argRef ? typeSignaturePart(argRef) : "unknown"))
-    .join(",")})`;
+    .join(",")})${returnType ? `->${typeSignaturePart(returnType)}` : ""}`;
 
 const objectWithArgsRef = (
   kind: ObjectRef["kind"],
@@ -2731,6 +2745,36 @@ const inferredOperatorClassSupportFunctionArgs = (
   return [];
 };
 
+const operatorClassSupportFunctionReturnType = (
+  accessMethod: string,
+  supportNumber: number,
+): ObjectRef | null => {
+  const normalizedAccessMethod = accessMethod.toLowerCase();
+
+  if (normalizedAccessMethod === "btree") {
+    if (supportNumber === 1) {
+      return createObjectRefFromAst("type", "int4");
+    }
+    if (supportNumber === 2 || supportNumber === 6) {
+      return createObjectRefFromAst("type", "void");
+    }
+    if (supportNumber === 3 || supportNumber === 4) {
+      return createObjectRefFromAst("type", "bool");
+    }
+  }
+
+  if (normalizedAccessMethod === "hash") {
+    if (supportNumber === 1) {
+      return createObjectRefFromAst("type", "int4");
+    }
+    if (supportNumber === 2) {
+      return createObjectRefFromAst("type", "int8");
+    }
+  }
+
+  return null;
+};
+
 const objectRefFromNamePartsWithArgs = (
   kind: ObjectRef["kind"],
   nameParts: string[],
@@ -2770,6 +2814,21 @@ const rangeFunctionArgs = (
   }
 
   return [];
+};
+
+const rangeFunctionReturnType = (
+  optionName: string,
+  rangeRef: ObjectRef | null,
+): ObjectRef | null => {
+  if (optionName === "canonical") {
+    return rangeRef;
+  }
+
+  if (optionName === "subtype_diff") {
+    return createObjectRefFromAst("type", "float8");
+  }
+
+  return null;
 };
 
 const rangeSubtypeRef = (params: unknown[]): ObjectRef | null => {
@@ -2933,18 +2992,26 @@ export const createExtractionContext = (
     }
 
     if (!hasExplicitMultirangeTypeName) {
-      addTypeKey(
-        multirangeTypeKeys,
-        createObjectRefFromAst(
-          "type",
-          defaultMultirangeTypeName(rangeRef.name),
-          rangeRef.schema,
-        ),
+      const defaultMultirangeRef = createObjectRefFromAst(
+        "type",
+        defaultMultirangeTypeName(rangeRef.name),
+        rangeRef.schema,
       );
+      addCreatedTypeKey(createdTypeKeys, defaultMultirangeRef);
+      addTypeKey(multirangeTypeKeys, defaultMultirangeRef);
     }
   }
 
   for (const providerRef of externalProviders) {
+    if (
+      providerRef.kind === "table" ||
+      providerRef.kind === "view" ||
+      providerRef.kind === "materialized_view"
+    ) {
+      addCreatedTypeKey(createdTypeKeys, relationRowTypeRef(providerRef));
+      continue;
+    }
+
     if (providerRef.kind !== "type") {
       continue;
     }
@@ -3315,14 +3382,21 @@ const extractCreateRangeDependencies = (
     if (rangeFunctionOptionNames.has(optionName)) {
       const functionNameParts = extractNameParts(typeName?.names);
       const functionArgs = rangeFunctionArgs(optionName, rangeRef, subtypeRef);
+      const functionReturnType = rangeFunctionReturnType(optionName, rangeRef);
       const functionRef = objectRefFromNamePartsWithArgs(
         "function",
         functionNameParts,
         functionArgs,
       );
       if (functionRef) {
+        const exactFunctionWithReturnRef = createObjectRefFromAst(
+          "function",
+          functionRef.name,
+          functionRef.schema,
+          typeRefsSignature(functionArgs, functionReturnType),
+        );
         const exactFunctionRef = markExactKindRef(
-          markExactSignatureRef(functionRef),
+          markExactSignatureRef(exactFunctionWithReturnRef),
         );
         if (
           isBuiltInRangeSupportFunctionName(functionNameParts, functionArgs)
@@ -3830,8 +3904,19 @@ const extractCreateOperatorDependencies = (
         operatorEstimatorFunctionArgs(optionName) ?? [],
       );
       if (estimatorFunctionRef) {
+        const estimatorFunctionArgs =
+          operatorEstimatorFunctionArgs(optionName) ?? [];
+        const estimatorFunctionWithReturnRef = createObjectRefFromAst(
+          "function",
+          estimatorFunctionRef.name,
+          estimatorFunctionRef.schema,
+          typeRefsSignature(
+            estimatorFunctionArgs,
+            createObjectRefFromAst("type", "float8"),
+          ),
+        );
         const exactEstimatorFunctionRef = markExactKindRef(
-          markExactSignatureRef(estimatorFunctionRef),
+          markExactSignatureRef(estimatorFunctionWithReturnRef),
         );
         if (
           isBuiltInOperatorEstimatorFunctionName(
@@ -4021,6 +4106,15 @@ const extractCreateAccessMethodDependencies = (
     extractNameParts(statementNode.handler_name),
   );
   if (handlerRef) {
+    const handlerReturnType =
+      accessMethodKind === null
+        ? null
+        : createObjectRefFromAst(
+            "type",
+            accessMethodKind === "index"
+              ? "index_am_handler"
+              : "table_am_handler",
+          );
     requires.push(
       markExactKindRef(
         markExactSignatureRef(
@@ -4028,7 +4122,10 @@ const extractCreateAccessMethodDependencies = (
             "function",
             handlerRef.name,
             handlerRef.schema,
-            typeRefsSignature([createObjectRefFromAst("type", "internal")]),
+            typeRefsSignature(
+              [createObjectRefFromAst("type", "internal")],
+              handlerReturnType,
+            ),
           ),
         ),
       ),
@@ -4279,6 +4376,10 @@ const extractCreateOperatorClassDependencies = (
               dataTypeRef,
               classArgRefs,
             );
+      const functionReturnType = operatorClassSupportFunctionReturnType(
+        accessMethod,
+        itemNumber,
+      );
       if (
         isBuiltInOperatorClassSupportFunctionName(
           nameParts,
@@ -4297,9 +4398,15 @@ const extractCreateOperatorClassDependencies = (
             functionArgs,
           );
           if (functionRef) {
+            const functionWithReturnRef = createObjectRefFromAst(
+              "function",
+              functionRef.name,
+              functionRef.schema,
+              typeRefsSignature(functionArgs, functionReturnType),
+            );
             requires.push(
               markOmitIfNoLocalProducerRef(
-                markExactKindRef(markExactSignatureRef(functionRef)),
+                markExactKindRef(markExactSignatureRef(functionWithReturnRef)),
               ),
             );
           }
@@ -4309,8 +4416,14 @@ const extractCreateOperatorClassDependencies = (
 
       const functionRef = objectWithArgsRef("function", itemName, functionArgs);
       if (functionRef) {
+        const functionWithReturnRef = createObjectRefFromAst(
+          "function",
+          functionRef.name,
+          functionRef.schema,
+          typeRefsSignature(functionArgs, functionReturnType),
+        );
         const exactFunctionRef = markExactKindRef(
-          markExactSignatureRef(functionRef),
+          markExactSignatureRef(functionWithReturnRef),
         );
         requires.push(exactFunctionRef);
         if (isPgCatalogQualifiedName(nameParts)) {
@@ -4402,6 +4515,37 @@ const baseTypeFunctionArgAlternatives = (
   return [];
 };
 
+const baseTypeFunctionReturnType = (
+  optionName: string,
+  typeRef: ObjectRef | null,
+): ObjectRef | null => {
+  if (optionName === "input" || optionName === "receive") {
+    return typeRef;
+  }
+
+  if (optionName === "output" || optionName === "typmod_out") {
+    return createObjectRefFromAst("type", "cstring");
+  }
+
+  if (optionName === "send") {
+    return createObjectRefFromAst("type", "bytea");
+  }
+
+  if (optionName === "typmod_in") {
+    return createObjectRefFromAst("type", "int4");
+  }
+
+  if (optionName === "analyze") {
+    return createObjectRefFromAst("type", "bool");
+  }
+
+  if (optionName === "subscript") {
+    return createObjectRefFromAst("type", "internal");
+  }
+
+  return null;
+};
+
 const extractCreateBaseTypeDependencies = (
   statementNode: Record<string, unknown>,
   context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
@@ -4481,6 +4625,7 @@ const extractCreateBaseTypeDependencies = (
     const functionRef = objectFromNameParts("function", functionNameParts);
     if (functionRef) {
       const alternatives = baseTypeFunctionArgAlternatives(optionName, typeRef);
+      const returnType = baseTypeFunctionReturnType(optionName, typeRef);
       const callbackRefs: ObjectRef[] = [];
       for (const args of alternatives) {
         const callbackRef = markExactKindRef(
@@ -4489,7 +4634,7 @@ const extractCreateBaseTypeDependencies = (
               "function",
               functionRef.name,
               functionRef.schema,
-              typeRefsSignature(args),
+              typeRefsSignature(args, returnType),
             ),
           ),
         );

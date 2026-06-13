@@ -185,25 +185,73 @@ const normalizeTypeExpression = (value: string): string => {
     .replace(/\s*\)/gu, ")");
 };
 
+const findReturnTypeSeparator = (value: string): number => {
+  let depth = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const char = value[index] ?? "";
+    const nextChar = value[index + 1] ?? "";
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (inQuotes) {
+      continue;
+    }
+
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === ")" && depth > 0) {
+      depth -= 1;
+      continue;
+    }
+
+    if (depth === 0 && char === "-" && nextChar === ">") {
+      return index;
+    }
+  }
+
+  return -1;
+};
+
 export const normalizeSignature = (value: string): string => {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
     return "";
   }
 
-  let body = trimmed;
+  const separatorIndex = findReturnTypeSeparator(trimmed);
+  const argsText =
+    separatorIndex >= 0 ? trimmed.slice(0, separatorIndex).trim() : trimmed;
+  const returnText =
+    separatorIndex >= 0 ? trimmed.slice(separatorIndex + 2).trim() : "";
+
+  let body = argsText;
   if (body.startsWith("(") && body.endsWith(")")) {
     body = body.slice(1, -1);
   }
 
+  const normalizedReturn =
+    returnText.length > 0 ? `->${normalizeTypeExpression(returnText)}` : "";
+
   if (body.trim().length === 0) {
-    return "()";
+    return `()${normalizedReturn}`;
   }
 
   const args = splitTopLevel(body, ",").map((arg) =>
     normalizeTypeExpression(arg),
   );
-  return `(${args.join(",")})`;
+  return `(${args.join(",")})${normalizedReturn}`;
 };
 
 export const createObjectRef = (

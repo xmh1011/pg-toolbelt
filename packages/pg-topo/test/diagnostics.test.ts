@@ -170,14 +170,16 @@ describe("diagnostics", () => {
     expect(missingDefaultWith).toHaveLength(0);
   });
 
-  test("external subtype providers do not require range default opclass providers", async () => {
+  test("external enum subtype providers do not require range default opclass providers", async () => {
     const result = await analyzeAndSort(
       [
         "create schema app;",
         "create type app.mood_range as range (subtype = app.mood);",
       ],
       {
-        externalProviders: [{ kind: "type", schema: "app", name: "mood" }],
+        externalProviders: [
+          { kind: "type", schema: "app", name: "mood", signature: "(enum)" },
+        ],
       },
     );
     const unresolved = result.diagnostics.filter(
@@ -189,6 +191,27 @@ describe("diagnostics", () => {
 
     expect(unresolved).toHaveLength(0);
     expect(missingDefault).toHaveLength(0);
+  });
+
+  test("external custom subtype providers still require range default opclass providers", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create schema app;",
+        "create type app.score_range as range (subtype = app.score);",
+      ],
+      {
+        externalProviders: [{ kind: "type", schema: "app", name: "score" }],
+      },
+    );
+    const missingDefault = result.diagnostics.filter(
+      (d) =>
+        d.code === "UNRESOLVED_DEPENDENCY" &&
+        d.message.includes(
+          "No default btree operator class provider found for range subtype 'app.score'",
+        ),
+    );
+
+    expect(missingDefault).toHaveLength(1);
   });
 
   test("external range operator class providers must match the omitted subtype", async () => {

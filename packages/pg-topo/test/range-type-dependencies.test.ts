@@ -4151,6 +4151,39 @@ describe("range type dependencies", () => {
     expect(rangeIndex).toBeGreaterThan(subtypeIndex);
   });
 
+  test("orders explicitly public range subtypes before shadowing built-in names", async () => {
+    const result = await analyzeAndSort([
+      "create type public.range_over_int4 as range (subtype = public.int4);",
+      "create type public.int4 as enum ('one', 'two');",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create type public.range_over_int4"),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const subtypeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type public.int4 as enum"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type public.range_over_int4"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "type",
+      schema: "public",
+      name: "int4",
+    });
+    expect(subtypeIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(subtypeIndex);
+  });
+
   test("reports duplicate operator class names per schema and access method", async () => {
     const result = await analyzeAndSort([
       "create operator class app.shared_ops for type int4 using btree as operator 1 < (int4, int4), function 1 btint4cmp(int4, int4);",
@@ -4267,6 +4300,88 @@ describe("range type dependencies", () => {
       schema: "public",
       name: "=",
       signature: "(public.aclitem,public.aclitem)",
+    });
+  });
+
+  test("accepts built-in xid and cid hash support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.xid_hash_ops for type xid using hash as operator 1 = (xid, xid);",
+      "create operator class app.cid_hash_ops for type cid using hash as operator 1 = (cid, cid);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const xidOperatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.xid_hash_ops"),
+    );
+    const cidOperatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.cid_hash_ops"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(xidOperatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator",
+      schema: "public",
+      name: "=",
+      signature: "(xid,xid)",
+    });
+    expect(cidOperatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator",
+      schema: "public",
+      name: "=",
+      signature: "(cid,cid)",
+    });
+  });
+
+  test("accepts built-in xid and cid hash support functions", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.xid_hash_ops for type xid using hash as operator 1 = (xid, xid), function 1 hashxid(xid), function 2 hashxidextended(xid, int8);",
+      "create operator class app.cid_hash_ops for type cid using hash as operator 1 = (cid, cid), function 1 hashcid(cid), function 2 hashcidextended(cid, int8);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const xidOperatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.xid_hash_ops"),
+    );
+    const cidOperatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.cid_hash_ops"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(xidOperatorClassStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "hashxid",
+      signature: "(xid)",
+    });
+    expect(xidOperatorClassStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "hashxidextended",
+      signature: "(xid,int8)",
+    });
+    expect(cidOperatorClassStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "hashcid",
+      signature: "(cid)",
+    });
+    expect(cidOperatorClassStatement?.requires).not.toContainEqual({
+      kind: "function",
+      schema: "public",
+      name: "hashcidextended",
+      signature: "(cid,int8)",
     });
   });
 

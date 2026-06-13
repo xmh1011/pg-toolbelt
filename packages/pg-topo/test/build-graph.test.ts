@@ -65,4 +65,35 @@ describe("buildGraph", () => {
     expect(shellToFunction).toBe(true);
     expect(rangeToFunction).toBe(false);
   });
+
+  test("does not use shell type providers for ordinary consumers", () => {
+    const shellType = node(
+      0,
+      "create type app.foo;",
+      [createObjectRefFromAst("type", "foo", "app", SHELL_TYPE_SIGNATURE)],
+      [],
+      "CREATE_TYPE",
+    );
+    const finalType = node(
+      1,
+      "create type app.foo as range (subtype = int4);",
+      [createObjectRefFromAst("type", "foo", "app")],
+      [createObjectRefFromAst("table", "uses_foo", "app")],
+      "CREATE_TYPE",
+    );
+    const ordinaryConsumer = node(
+      2,
+      "create table app.uses_foo(value app.foo);",
+      [createObjectRefFromAst("table", "uses_foo", "app")],
+      [createObjectRefFromAst("type", "foo", "app")],
+      "CREATE_TABLE",
+    );
+
+    const graph = buildGraph([shellType, finalType, ordinaryConsumer]);
+    const shellToTable = graph.edges.get(0)?.has(2) ?? false;
+    const finalTypeToTable = graph.edges.get(1)?.has(2) ?? false;
+
+    expect(shellToTable).toBe(false);
+    expect(finalTypeToTable).toBe(true);
+  });
 });

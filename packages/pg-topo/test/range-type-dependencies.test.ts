@@ -82,6 +82,26 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(rangeIndex);
   }, 120000);
 
+  test("matches unqualified built-in range support function providers for pg_catalog subtypes", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = pg_catalog.int4, subtype_diff = app.int4_subdiff);",
+      "create function app.int4_subdiff(a int4, b int4) returns float8 language sql immutable as $$ select (a - b)::float8 $$;",
+      "create schema app;",
+    ]);
+    const unresolvedSubtypeDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "int4_subdiff",
+        ) === true,
+    );
+
+    expect(unresolvedSubtypeDiff).toHaveLength(0);
+  });
+
   test("preserves local float8mi subtype_diff functions", async () => {
     const result = await analyzeAndSort([
       "set search_path = public, pg_catalog;",
@@ -5497,6 +5517,25 @@ describe("range type dependencies", () => {
     expect(unresolvedArrayOverlap).toHaveLength(0);
   });
 
+  test("accepts mixed built-in GIN jsonb support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.jsonb_gin_ops for type jsonb using gin as operator 9 ? (jsonb, text), operator 10 ?| (jsonb, text[]), operator 11 ?& (jsonb, text[]);",
+      "create schema app;",
+    ]);
+    const unresolvedGinJsonbOperators = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ["?", "?|", "?&"].includes(ref.name),
+        ) === true,
+    );
+
+    expect(unresolvedGinJsonbOperators).toHaveLength(0);
+  });
+
   test("diagnoses invalid pg_catalog operator class data types", async () => {
     const result = await analyzeAndSort([
       "create operator class app.bad_ops for type pg_catalog.no_such using gist as operator 1 << (box, box);",
@@ -5514,6 +5553,57 @@ describe("range type dependencies", () => {
     );
 
     expect(missingDataType).toHaveLength(1);
+  });
+
+  test("accepts shipped pg_catalog operator argument types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator app.@@@ (function = app.jsonpath_match, leftarg = pg_catalog.jsonpath, rightarg = pg_catalog.jsonpath);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "jsonpath_match",
+            signature: "(pg_catalog.jsonpath,pg_catalog.jsonpath)",
+          },
+        ],
+      },
+    );
+    const missingJsonpath = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "jsonpath",
+        ) === true,
+    );
+
+    expect(missingJsonpath).toHaveLength(0);
+  });
+
+  test("accepts built-in btree name_ops operator families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.name_btree_ops for type name using btree family pg_catalog.name_ops as operator 1 < (name, name), operator 2 <= (name, name), operator 3 = (name, name), operator 4 >= (name, name), operator 5 > (name, name), function 1 btnamecmp(name, name);",
+      "create schema app;",
+    ]);
+    const unresolvedFamily = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_family" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "name_ops" &&
+            ref.signature === "(btree)",
+        ) === true,
+    );
+
+    expect(unresolvedFamily).toHaveLength(0);
   });
 
   test("does not require built-in schemas for operator link refs", async () => {
@@ -5694,6 +5784,68 @@ describe("range type dependencies", () => {
     expect(missingStorageType).toHaveLength(1);
   });
 
+  test("diagnoses unknown pg_catalog opclass support operator argument types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator class app.bad_ops for type int4 using btree as operator 1 app.< (pg_catalog.no_such, pg_catalog.no_such), function 1 btint4cmp(int4, int4);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "operator",
+            schema: "app",
+            name: "<",
+            signature: "(pg_catalog.no_such,pg_catalog.no_such)",
+          },
+        ],
+      },
+    );
+    const missingOperatorArgTypes = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "no_such",
+        ) === true,
+    );
+
+    expect(missingOperatorArgTypes.length).toBeGreaterThan(0);
+  });
+
+  test("diagnoses unknown pg_catalog opclass support function class argument types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator class app.bad_ops for type int4 using btree as function 1 (pg_catalog.no_such, pg_catalog.no_such) app.cmp(int4, int4);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "cmp",
+            signature: "(int4,int4)",
+          },
+        ],
+      },
+    );
+    const missingFunctionClassArgTypes = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "no_such",
+        ) === true,
+    );
+
+    expect(missingFunctionClassArgTypes.length).toBeGreaterThan(0);
+  });
+
   test("diagnoses self row-type and range subtype references", async () => {
     const tableResult = await analyzeAndSort([
       "create table app.events(parent app.events);",
@@ -5724,6 +5876,23 @@ describe("range type dependencies", () => {
 
     expect(selfRowType).toHaveLength(1);
     expect(selfRangeSubtype).toHaveLength(1);
+  });
+
+  test("diagnoses explicit multirange names that reuse the range type name", async () => {
+    const result = await analyzeAndSort([
+      "create type app.r as range (subtype = int4, multirange_type_name = app.r);",
+      "create schema app;",
+    ]);
+    const duplicateMultirangeName = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" && ref.schema === "app" && ref.name === "r",
+        ) === true,
+    );
+
+    expect(duplicateMultirangeName.length).toBeGreaterThan(0);
   });
 
   test("diagnoses base types that copy themselves through type options", async () => {

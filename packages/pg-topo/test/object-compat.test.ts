@@ -126,6 +126,25 @@ describe("signaturesCompatible", () => {
     ).toBe(false);
   });
 
+  test("matches unqualified built-in providers for pg_catalog requirements", () => {
+    const options = { requireExactArity: true };
+
+    expect(
+      signaturesCompatible(
+        "(pg_catalog.int4,pg_catalog.int4)",
+        "(int4,int4)",
+        options,
+      ),
+    ).toBe(true);
+    expect(
+      signaturesCompatible(
+        "(pg_catalog.int4,pg_catalog.int4)",
+        "(public.int4,public.int4)",
+        options,
+      ),
+    ).toBe(false);
+  });
+
   test("single-arg unknown matches any single-param or multi-param provider", () => {
     expect(signaturesCompatible("(unknown)", "(bigint)")).toBe(true);
     expect(signaturesCompatible("(unknown)", "(bigint,text)")).toBe(true);

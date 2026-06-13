@@ -265,6 +265,7 @@ describe("diagnostics", () => {
           schema: "app",
           name: "score_ops",
           signature: "(btree,app.score)",
+          implicitProvider: true,
         },
       ],
     });
@@ -337,6 +338,35 @@ describe("diagnostics", () => {
         },
       ],
     });
+    const missingDefault = result.diagnostics.filter(
+      (d) =>
+        d.code === "UNRESOLVED_DEPENDENCY" &&
+        d.message.includes(
+          "No default btree operator class provider found for range subtype 'app.score'",
+        ),
+    );
+
+    expect(missingDefault).toHaveLength(1);
+  });
+
+  test("external non-default operator class providers do not satisfy omitted range subtype defaults", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create schema app;",
+        "create type app.score as (value int4);",
+        "create type app.score_range as range (subtype = app.score);",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "operator_class",
+            schema: "app",
+            name: "score_ops",
+            signature: "(btree,app.score)",
+          },
+        ],
+      },
+    );
     const missingDefault = result.diagnostics.filter(
       (d) =>
         d.code === "UNRESOLVED_DEPENDENCY" &&

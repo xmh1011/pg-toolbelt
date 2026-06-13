@@ -86,6 +86,32 @@ describe("signaturesCompatible", () => {
     expect(signaturesCompatible(callSig, overload5)).toBe(false);
   });
 
+  test("matches exact callbacks with canonical pg_catalog type signatures", () => {
+    const options = { requireExactArity: true };
+
+    expect(
+      signaturesCompatible(
+        "(public.text,public.text)",
+        "(pg_catalog.text,pg_catalog.text)",
+        options,
+      ),
+    ).toBe(true);
+    expect(
+      signaturesCompatible(
+        "(public.numeric,public.numeric)",
+        "(pg_catalog.numeric,pg_catalog.numeric)",
+        options,
+      ),
+    ).toBe(true);
+    expect(
+      signaturesCompatible(
+        "(public.uuid,public.uuid)",
+        "(pg_catalog.uuid,pg_catalog.uuid)",
+        options,
+      ),
+    ).toBe(true);
+  });
+
   test("single-arg unknown matches any single-param or multi-param provider", () => {
     expect(signaturesCompatible("(unknown)", "(bigint)")).toBe(true);
     expect(signaturesCompatible("(unknown)", "(bigint,text)")).toBe(true);

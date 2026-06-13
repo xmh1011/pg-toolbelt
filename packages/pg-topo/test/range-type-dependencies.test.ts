@@ -806,6 +806,22 @@ describe("range type dependencies", () => {
     expect(operatorIndex).toBeGreaterThan(operatorFunctionIndex);
   }, 120000);
 
+  test("does not require producer statements for built-in scalar boundary estimators", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<=# (function = app.score_le, leftarg = app.score, rightarg = app.score, restrict = scalarlesel, join = scalarlejoinsel);",
+      "create operator app.>=# (function = app.score_ge, leftarg = app.score, rightarg = app.score, restrict = scalargesel, join = scalargejoinsel);",
+      "create function app.score_le(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value <= (b).value $$;",
+      "create function app.score_ge(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value >= (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+
+    expect(unresolved).toHaveLength(0);
+  });
+
   test("requires estimator names in the matching restrict or join slot", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = texteq, leftarg = text, rightarg = text, restrict = eqjoinsel, join = eqsel);",
@@ -4040,6 +4056,39 @@ describe("range type dependencies", () => {
     );
 
     expect(unknownCallback.length).toBeGreaterThan(0);
+  });
+
+  test("diagnoses unknown pg_catalog base type option types", async () => {
+    const result = await analyzeAndSort([
+      "create type app.widget (input = app.widget_in, output = app.widget_out, like = pg_catalog.no_such, element = pg_catalog.no_such_element, internallength = 4, alignment = int4);",
+      "create function app.widget_in(value cstring) returns app.widget language internal immutable strict as 'int4in';",
+      "create function app.widget_out(value app.widget) returns cstring language internal immutable strict as 'int4out';",
+      "create type app.widget;",
+      "create schema app;",
+    ]);
+    const missingLike = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "no_such",
+        ) === true,
+    );
+    const missingElement = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "no_such_element",
+        ) === true,
+    );
+
+    expect(missingLike).toHaveLength(1);
+    expect(missingElement).toHaveLength(1);
   });
 
   test("does not require producer statements for built-in operator implementation functions", async () => {

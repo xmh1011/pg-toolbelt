@@ -4184,6 +4184,37 @@ describe("range type dependencies", () => {
     expect(rangeIndex).toBeGreaterThan(subtypeIndex);
   });
 
+  test("orders explicitly public array types before shadowing built-in names", async () => {
+    const result = await analyzeAndSort([
+      "create table public.events(id int primary key, values public.int4[] not null);",
+      "create type public.int4 as enum ('one', 'two');",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const tableStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create table public.events"),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const typeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type public.int4 as enum"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table public.events"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(tableStatement?.requires).toContainEqual({
+      kind: "type",
+      schema: "public",
+      name: "int4[]",
+    });
+    expect(typeIndex).toBeGreaterThanOrEqual(0);
+    expect(tableIndex).toBeGreaterThan(typeIndex);
+  });
+
   test("reports duplicate operator class names per schema and access method", async () => {
     const result = await analyzeAndSort([
       "create operator class app.shared_ops for type int4 using btree as operator 1 < (int4, int4), function 1 btint4cmp(int4, int4);",
@@ -4383,6 +4414,26 @@ describe("range type dependencies", () => {
       name: "hashcidextended",
       signature: "(cid,int8)",
     });
+  });
+
+  test("diagnoses non-hash routines in hash support slot two", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.bad_hash_ops for type int4 using hash as function 2 btint48cmp(int4, int8);",
+      "create schema app;",
+    ]);
+    const invalidHashSupportFunction = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "btint48cmp" &&
+            ref.signature === "(public.int4,public.int8)",
+        ) === true,
+    );
+
+    expect(invalidHashSupportFunction).toHaveLength(1);
   });
 
   test("matches typmod input functions with array argument providers", async () => {

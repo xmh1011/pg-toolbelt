@@ -9,6 +9,7 @@ import {
   relationFromRangeVarNode,
   typeFromTypeNameNode,
 } from "../src/extract/shared-refs";
+import { isBuiltInObjectRef } from "../src/model/object-ref";
 
 describe("extractStringValue", () => {
   test("returns undefined for null or non-object", () => {
@@ -264,5 +265,19 @@ describe("typeFromTypeNameNode", () => {
       name: "int4[]",
       schema: "app",
     });
+  });
+
+  test("does not treat explicitly public array types as built-in", () => {
+    const ref = typeFromTypeNameNode({
+      names: [{ String: { sval: "public" } }, { String: { sval: "int4" } }],
+      arrayBounds: [{}],
+    });
+
+    expect(ref).toEqual({
+      kind: "type",
+      name: "int4[]",
+      schema: "public",
+    });
+    expect(ref ? isBuiltInObjectRef(ref) : undefined).toBe(false);
   });
 });

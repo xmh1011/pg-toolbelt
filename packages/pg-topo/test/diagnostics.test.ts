@@ -170,6 +170,27 @@ describe("diagnostics", () => {
     expect(missingDefaultWith).toHaveLength(0);
   });
 
+  test("external subtype providers do not require range default opclass providers", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create schema app;",
+        "create type app.mood_range as range (subtype = app.mood);",
+      ],
+      {
+        externalProviders: [{ kind: "type", schema: "app", name: "mood" }],
+      },
+    );
+    const unresolved = result.diagnostics.filter(
+      (d) => d.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const missingDefault = unresolved.filter((d) =>
+      d.message.includes("No default btree operator class provider"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(missingDefault).toHaveLength(0);
+  });
+
   test("external range operator class providers must match the omitted subtype", async () => {
     const sql = [
       "create schema app;",

@@ -4062,6 +4062,92 @@ describe("range type dependencies", () => {
     expect(unresolved).toHaveLength(0);
   });
 
+  test("diagnoses invalid pg_catalog range support functions", async () => {
+    const result = await analyzeAndSort([
+      "create type app.r as range (subtype = int4, subtype_diff = pg_catalog.daterange_subdiff);",
+      "create schema app;",
+    ]);
+    const invalidRangeSupportFunction = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "daterange_subdiff" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+
+    expect(invalidRangeSupportFunction).toHaveLength(1);
+  });
+
+  test("accepts record image support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.record_image_ops for type record using btree as operator 1 *< (record, record), operator 2 *<= (record, record), operator 3 *= (record, record), operator 4 *>= (record, record), operator 5 *> (record, record), function 1 btrecordimagecmp(record, record);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.record_image_ops"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator",
+      schema: "public",
+      name: "*<",
+      signature: "(public.record,public.record)",
+    });
+  });
+
+  test("diagnoses qualified estimators with the wrong signature", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.=== (function = texteq, leftarg = text, rightarg = text, restrict = pg_catalog.eqjoinsel);",
+      "create schema app;",
+    ]);
+    const invalidQualifiedEstimator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "eqjoinsel" &&
+            ref.signature === "(internal,oid,internal,int4)",
+        ) === true,
+    );
+
+    expect(invalidQualifiedEstimator).toHaveLength(1);
+  });
+
+  test("accepts hash-only built-in equality operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.aclitem_hash_ops for type aclitem using hash as operator 1 = (aclitem, aclitem), function 1 hash_aclitem(aclitem);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.aclitem_hash_ops"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator",
+      schema: "public",
+      name: "=",
+      signature: "(public.aclitem,public.aclitem)",
+    });
+  });
+
   test("matches typmod input functions with array argument providers", async () => {
     const result = await analyzeAndSort([
       "create type app.widget (input = app.widget_in, output = app.widget_out, typmod_in = app.widget_typmod_in, typmod_out = app.widget_typmod_out, internallength = 4, alignment = int4);",

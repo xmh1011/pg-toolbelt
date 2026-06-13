@@ -998,6 +998,29 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("does not require producers for built-in network containment callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.&& (function = network_overlap, leftarg = inet, rightarg = inet);",
+      "create operator app.<< (function = network_sub, leftarg = inet, rightarg = inet);",
+      "create operator app.<<= (function = network_subeq, leftarg = inet, rightarg = inet);",
+      "create operator app.>> (function = network_sup, leftarg = inet, rightarg = inet);",
+      "create operator app.>>= (function = network_supeq, leftarg = inet, rightarg = inet);",
+      "create schema app;",
+    ]);
+    const unresolvedNetworkCallbacks = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name.startsWith("network_"),
+        ) === true,
+    );
+
+    expect(unresolvedNetworkCallbacks).toHaveLength(0);
+  });
+
   test("requires exact operator implementation signatures", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = app.score_eq, leftarg = app.score, rightarg = app.score);",
@@ -4690,6 +4713,96 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(explicitArrayTypeIndex);
   }, 120000);
 
+  test("does not diagnose colliding array typnames as self references", async () => {
+    const result = await analyzeAndSort([
+      "create table app.foo(id int primary key, value app._foo not null);",
+      "create type app._foo as enum ('one', 'two');",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const selfReferenceDiagnostics = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.message.includes("cannot reference its own row type"),
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const enumIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app._foo"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.foo"),
+    );
+
+    expect(selfReferenceDiagnostics).toHaveLength(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(enumIndex).toBeGreaterThanOrEqual(0);
+    expect(tableIndex).toBeGreaterThan(enumIndex);
+  }, 120000);
+
+  test("includes relation row types in implicit array collision context", async () => {
+    const result = await analyzeAndSort([
+      "create type app.foo as enum ('one', 'two');",
+      "create table app._foo(id int primary key);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app._foo"),
+    );
+    const enumIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.foo"),
+    );
+
+    expect(executionErrors).toHaveLength(0);
+    expect(tableIndex).toBeGreaterThanOrEqual(0);
+    expect(enumIndex).toBeGreaterThan(tableIndex);
+  }, 120000);
+
+  test("applies implicit array collision handling to row-type providers", async () => {
+    const result = await analyzeAndSort([
+      "create table app.uses_bar(id int primary key, value app._bar not null);",
+      "create table app.bar(id int primary key);",
+      "create type app._bar as enum ('one', 'two');",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const duplicateCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "DUPLICATE_PRODUCER",
+    ).length;
+    const enumIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app._bar"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.bar"),
+    );
+    const consumerIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.uses_bar"),
+    );
+
+    expect(duplicateCount).toBe(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(enumIndex).toBeGreaterThanOrEqual(0);
+    expect(tableIndex).toBeGreaterThan(enumIndex);
+    expect(consumerIndex).toBeGreaterThan(enumIndex);
+  }, 120000);
+
   test("provides generated array typname aliases for custom types", async () => {
     const result = await analyzeAndSort([
       "create table app.people(id int primary key, moods app._mood not null);",
@@ -5017,6 +5130,46 @@ describe("range type dependencies", () => {
       name: "integer_minmax_ops",
       signature: "(brin)",
     });
+  });
+
+  test("accepts built-in GiST and SP-GiST inet operator families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.inet_gist_ops for type inet using gist family pg_catalog.inet_ops as operator 3 && (inet, inet), function 1 inet_consistent(internal, inet, int2, oid, internal);",
+      "create operator class app.inet_spgist_ops for type inet using spgist family pg_catalog.inet_ops as operator 3 && (inet, inet), function 1 inet_spg_config(internal, internal);",
+      "create schema app;",
+    ]);
+    const unresolvedInetFamilies = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_family" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "inet_ops",
+        ) === true,
+    );
+
+    expect(unresolvedInetFamilies).toHaveLength(0);
+  });
+
+  test("diagnoses non-existent GiST network_ops operator families", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.inet_gist_ops for type inet using gist family pg_catalog.network_ops as operator 3 && (inet, inet), function 1 inet_consistent(internal, inet, int2, oid, internal);",
+      "create schema app;",
+    ]);
+    const invalidNetworkFamily = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_family" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "network_ops" &&
+            ref.signature === "(gist)",
+        ) === true,
+    );
+
+    expect(invalidNetworkFamily).toHaveLength(1);
   });
 
   test("diagnoses btree-only pattern families used by hash opclasses", async () => {

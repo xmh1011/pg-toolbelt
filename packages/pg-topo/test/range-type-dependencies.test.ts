@@ -5459,6 +5459,37 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("preserves implicitly catalog-qualified range callback argument signatures", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = int4, subtype_diff = app.diff);",
+      "create function app.diff(a public.int4, b public.int4) returns float8 language sql immutable as $$ select 0::float8 $$;",
+      "create type public.int4 as (value integer);",
+      "create schema app;",
+    ]);
+    const unresolvedDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+        ) === true,
+    );
+    const rangeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.int_range"),
+    );
+
+    expect(unresolvedDiff).toHaveLength(1);
+    expect(rangeStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "diff",
+      signature: "(pg_catalog.int4,pg_catalog.int4)",
+    });
+  });
+
   test("matches external range provider default multirange types in polymorphic opclasses", async () => {
     const result = await analyzeAndSort(
       [

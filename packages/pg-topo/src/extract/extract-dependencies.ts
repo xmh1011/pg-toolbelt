@@ -1136,6 +1136,7 @@ const builtInHashOperatorFamilyNames = new Set([
   "macaddr8_ops",
   "macaddr_ops",
   "multirange_ops",
+  "name_ops",
   "network_ops",
   "numeric_ops",
   "oid_ops",
@@ -1661,6 +1662,10 @@ const operatorClassSignature = (
       ? `(${accessMethod},${operatorClassTypeSignaturePart(dataTypeRef)})`
       : accessMethod
     : undefined;
+
+const operatorClassIdentitySignature = (
+  accessMethod: string,
+): string | undefined => (accessMethod ? `(${accessMethod})` : undefined);
 
 const objectWithArgsTypeRefs = (
   objectWithArgs: unknown,
@@ -2674,6 +2679,14 @@ const extractCreateOperatorClassDependencies = (
         operatorClassSignature(accessMethod, dataTypeRef),
       ),
     );
+    provides.push(
+      createObjectRefFromAst(
+        "operator_class",
+        operatorClassRef.name,
+        operatorClassRef.schema,
+        operatorClassIdentitySignature(accessMethod),
+      ),
+    );
     if (!operatorFamilyRef) {
       provides.push(
         markImplicitProviderRef(
@@ -2837,7 +2850,23 @@ const extractCreateOperatorClassDependencies = (
 
       const functionRef = objectWithArgsRef("function", itemName);
       if (functionRef) {
-        requires.push(markExactSignatureRef(functionRef));
+        const exactFunctionRef = markExactSignatureRef(functionRef);
+        requires.push(exactFunctionRef);
+        const functionName = nameParts.at(-1)?.toLowerCase();
+        if (
+          nameParts.length === 2 &&
+          nameParts[0]?.toLowerCase() === "pg_catalog" &&
+          functionName &&
+          builtInOperatorClassSupportFunctionSignatures.has(functionName)
+        ) {
+          diagnostics.push({
+            code: "UNRESOLVED_DEPENDENCY",
+            message: `No valid pg_catalog support function '${functionRef.name}' found for access method '${accessMethod || "unknown"}' support number ${itemNumber}.`,
+            objectRefs: [exactFunctionRef],
+            suggestedFix:
+              "Use a pg_catalog support routine that matches the selected access method, support number, and argument signature.",
+          });
+        }
       }
       continue;
     }

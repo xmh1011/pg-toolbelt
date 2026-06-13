@@ -285,12 +285,16 @@ export const isBuiltInObjectRef = (ref: ObjectRef): boolean => {
     return true;
   }
 
-  if (ref.kind === "type" && BUILTIN_TYPES.has(nameLower)) {
+  if (
+    ref.kind === "type" &&
+    (!schemaLower || schemaLower === DEFAULT_SCHEMA) &&
+    BUILTIN_TYPES.has(nameLower)
+  ) {
     return true;
   }
 
   if (ref.kind === "type" && nameLower.endsWith("[]")) {
-    if (schemaLower) {
+    if (schemaLower && schemaLower !== DEFAULT_SCHEMA) {
       return false;
     }
     return BUILTIN_TYPES.has(nameLower.slice(0, -"[]".length));

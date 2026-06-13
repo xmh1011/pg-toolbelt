@@ -153,6 +153,65 @@ const signatureArgCompatible = (
   );
 };
 
+const BINARY_COERCIBLE_OPERATOR_CLASS_TYPES: Record<string, string[]> = {
+  cidr: ["inet"],
+  varchar: ["text"],
+};
+
+const operatorClassTypeCompatible = (
+  requiredArg: string,
+  providedArg: string,
+): boolean => {
+  if (signatureArgCompatible(requiredArg, providedArg)) {
+    return true;
+  }
+
+  const requiredBase = signatureArgBase(requiredArg);
+  const providedBase = signatureArgBase(providedArg);
+  return (
+    BINARY_COERCIBLE_OPERATOR_CLASS_TYPES[requiredBase]?.includes(
+      providedBase,
+    ) === true
+  );
+};
+
+export const operatorClassSignaturesCompatible = (
+  requiredSignature?: string,
+  providedSignature?: string,
+): boolean => {
+  const requiredArgs = signatureArgs(requiredSignature);
+  const providedArgs = signatureArgs(providedSignature);
+  if (!requiredArgs || !providedArgs) {
+    return signaturesCompatible(requiredSignature, providedSignature, {
+      requireExactArity: true,
+    });
+  }
+
+  if (requiredArgs.length !== 2 || providedArgs.length !== 2) {
+    return signaturesCompatible(requiredSignature, providedSignature, {
+      requireExactArity: true,
+    });
+  }
+
+  const requiredAccessMethod = requiredArgs[0];
+  const providedAccessMethod = providedArgs[0];
+  const requiredType = requiredArgs[1];
+  const providedType = providedArgs[1];
+  if (
+    typeof requiredAccessMethod !== "string" ||
+    typeof providedAccessMethod !== "string" ||
+    typeof requiredType !== "string" ||
+    typeof providedType !== "string"
+  ) {
+    return false;
+  }
+
+  return (
+    signatureArgCompatible(requiredAccessMethod, providedAccessMethod) &&
+    operatorClassTypeCompatible(requiredType, providedType)
+  );
+};
+
 type SignatureCompatibilityOptions = {
   allowNamedArgumentsInRequirement?: boolean;
   allowVariadicProviderTail?: boolean;

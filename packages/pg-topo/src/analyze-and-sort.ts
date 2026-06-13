@@ -16,6 +16,7 @@ import { compareStatementIndices, topoSort } from "./graph/topo-sort.ts";
 import { type ParsedStatement, parseSqlContent } from "./ingest/parse.ts";
 import {
   isKindCompatible,
+  operatorClassSignaturesCompatible,
   signaturesCompatible,
 } from "./model/object-compat.ts";
 import {
@@ -94,10 +95,9 @@ const addImplicitRangeOperatorClassDependencies = (
       externalProviders?.some(
         (providerRef) =>
           providerRef.kind === "operator_class" &&
-          signaturesCompatible(
+          operatorClassSignaturesCompatible(
             `(btree,${subtypeSignature})`,
             providerRef.signature,
-            { requireExactArity: true },
           ),
       ) === true
     );
@@ -252,11 +252,21 @@ const omitRequirementsWithoutLocalProducers = (
         if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
           continue;
         }
-        if (
-          !signaturesCompatible(requiredRef.signature, providedRef.signature, {
-            requireExactArity: requiresExactSignature(requiredRef),
-          })
-        ) {
+        const signaturesMatch =
+          requiredRef.kind === "operator_class" &&
+          providedRef.kind === "operator_class"
+            ? operatorClassSignaturesCompatible(
+                requiredRef.signature,
+                providedRef.signature,
+              )
+            : signaturesCompatible(
+                requiredRef.signature,
+                providedRef.signature,
+                {
+                  requireExactArity: requiresExactSignature(requiredRef),
+                },
+              );
+        if (!signaturesMatch) {
           continue;
         }
         return true;

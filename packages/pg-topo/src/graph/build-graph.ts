@@ -1,5 +1,6 @@
 import {
   isKindCompatible,
+  operatorClassSignaturesCompatible,
   signaturesCompatible,
 } from "../model/object-compat.ts";
 import {
@@ -100,12 +101,18 @@ const externalProviderSatisfies = (
     ) {
       continue;
     }
-    if (
-      !signaturesCompatible(requiredRef.signature, provider.signature, {
-        allowVariadicProviderTail: true,
-        requireExactArity: requiresExactSignature(requiredRef),
-      })
-    ) {
+    const signaturesMatch =
+      requiredRef.kind === "operator_class" &&
+      provider.kind === "operator_class"
+        ? operatorClassSignaturesCompatible(
+            requiredRef.signature,
+            provider.signature,
+          )
+        : signaturesCompatible(requiredRef.signature, provider.signature, {
+            allowVariadicProviderTail: true,
+            requireExactArity: requiresExactSignature(requiredRef),
+          });
+    if (!signaturesMatch) {
       continue;
     }
     return true;
@@ -171,11 +178,17 @@ const producerIndicesForRequirement = (
       if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
         return false;
       }
-      if (
-        !signaturesCompatible(requiredRef.signature, providedRef.signature, {
-          requireExactArity: requiresExactSignature(requiredRef),
-        })
-      ) {
+      const signaturesMatch =
+        requiredRef.kind === "operator_class" &&
+        providedRef.kind === "operator_class"
+          ? operatorClassSignaturesCompatible(
+              requiredRef.signature,
+              providedRef.signature,
+            )
+          : signaturesCompatible(requiredRef.signature, providedRef.signature, {
+              requireExactArity: requiresExactSignature(requiredRef),
+            });
+      if (!signaturesMatch) {
         return false;
       }
       return true;
@@ -202,9 +215,15 @@ const hasCompatibleProvidedObject = (
     if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
       return false;
     }
-    return signaturesCompatible(requiredRef.signature, providedRef.signature, {
-      requireExactArity: requiresExactSignature(requiredRef),
-    });
+    return requiredRef.kind === "operator_class" &&
+      providedRef.kind === "operator_class"
+      ? operatorClassSignaturesCompatible(
+          requiredRef.signature,
+          providedRef.signature,
+        )
+      : signaturesCompatible(requiredRef.signature, providedRef.signature, {
+          requireExactArity: requiresExactSignature(requiredRef),
+        });
   });
 
 const findShellTypeProducerIndex = (

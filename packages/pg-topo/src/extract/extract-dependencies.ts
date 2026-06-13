@@ -56,9 +56,17 @@ const EMPTY_EXTRACTION_CONTEXT: ExtractionContext = {
   domainBaseTypes: new Map(),
 };
 
+const generatedArrayTypeName = (typeName: string): string =>
+  clipPostgresIdentifier(`_${typeName}`);
+
 const typeProviderRefs = (typeRef: ObjectRef): ObjectRef[] => [
   createObjectRefFromAst("type", typeRef.name, typeRef.schema),
   createObjectRefFromAst("type", `${typeRef.name}[]`, typeRef.schema),
+  createObjectRefFromAst(
+    "type",
+    generatedArrayTypeName(typeRef.name),
+    typeRef.schema,
+  ),
 ];
 
 const relationRowTypeProviderRefs = (relationRef: ObjectRef): ObjectRef[] =>
@@ -73,7 +81,8 @@ const isSelfTypeReference = (
   requiredTypeRef.kind === "type" &&
   requiredTypeRef.schema === createdTypeRef.schema &&
   (requiredTypeRef.name === createdTypeRef.name ||
-    requiredTypeRef.name === `${createdTypeRef.name}[]`);
+    requiredTypeRef.name === `${createdTypeRef.name}[]` ||
+    requiredTypeRef.name === generatedArrayTypeName(createdTypeRef.name));
 
 const extractCreateTableDependencies = (
   statementNode: Record<string, unknown>,
@@ -1465,6 +1474,51 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["date_cmp", [["date", "date"]]],
   ["date_sortsupport", [["internal"]]],
   ["enum_cmp", [["anyenum", "anyenum"]]],
+  ["gist_box_consistent", [["internal", "box", "int2", "oid", "internal"]]],
+  [
+    "ginarrayconsistent",
+    [
+      [
+        "internal",
+        "int2",
+        "anyarray",
+        "int4",
+        "internal",
+        "internal",
+        "internal",
+        "internal",
+      ],
+    ],
+  ],
+  ["ginarrayextract", [["anyarray", "internal", "internal"]]],
+  [
+    "ginarraytriconsistent",
+    [
+      [
+        "internal",
+        "int2",
+        "anyarray",
+        "int4",
+        "internal",
+        "internal",
+        "internal",
+      ],
+    ],
+  ],
+  [
+    "ginqueryarrayextract",
+    [
+      [
+        "anyarray",
+        "internal",
+        "int2",
+        "internal",
+        "internal",
+        "internal",
+        "internal",
+      ],
+    ],
+  ],
   ["hash_aclitem", [["aclitem"]]],
   ["hash_aclitem_extended", [["aclitem", "int8"]]],
   ["hash_array", [["anyarray"]]],
@@ -1554,6 +1608,11 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["pg_lsn_hash", [["pg_lsn"]]],
   ["pg_lsn_hash_extended", [["pg_lsn", "int8"]]],
   ["range_cmp", [["anyrange", "anyrange"]]],
+  ["spg_text_choose", [["internal", "internal"]]],
+  ["spg_text_config", [["internal", "internal"]]],
+  ["spg_text_inner_consistent", [["internal", "internal"]]],
+  ["spg_text_leaf_consistent", [["internal", "internal"]]],
+  ["spg_text_picksplit", [["internal", "internal"]]],
   ["time_cmp", [["time", "time"]]],
   ["time_hash", [["time"]]],
   ["time_hash_extended", [["time", "int8"]]],
@@ -1673,6 +1732,76 @@ const builtInOperatorClassSupportFunctionMatchesSlot = (
       signature[0] === "internal" &&
       builtInBrinSupportFunctionNames.has(name)
     );
+  }
+
+  if (normalizedAccessMethod === "gist") {
+    if (supportNumber === 1 || supportNumber === 8) {
+      return signature.length === 5 && signature[0] === "internal";
+    }
+
+    if ([2, 6].includes(supportNumber)) {
+      return signature.length === 2 && signature[0] === "internal";
+    }
+
+    if (supportNumber === 5) {
+      return (
+        signature.length === 3 && signature.every((type) => type === "internal")
+      );
+    }
+
+    if (supportNumber === 7) {
+      return signature.length === 3 && signature[2] === "internal";
+    }
+
+    if ([3, 4, 9, 10, 11].includes(supportNumber)) {
+      return signature.length === 1 && signature[0] === "internal";
+    }
+  }
+
+  if (normalizedAccessMethod === "gin") {
+    if (supportNumber === 1) {
+      return signature.length === 2;
+    }
+
+    if (supportNumber === 2) {
+      return signature.length === 3 && signature[1] === "internal";
+    }
+
+    if (supportNumber === 3) {
+      return signature.length === 7 && signature[1] === "internal";
+    }
+
+    if (supportNumber === 4) {
+      return signature.length === 8 && signature[0] === "internal";
+    }
+
+    if (supportNumber === 5) {
+      return signature.length === 4;
+    }
+
+    if (supportNumber === 6) {
+      return signature.length === 7 && signature[0] === "internal";
+    }
+
+    if (supportNumber === 7) {
+      return signature.length === 1 && signature[0] === "internal";
+    }
+  }
+
+  if (normalizedAccessMethod === "spgist") {
+    if ([1, 2, 3, 4, 5].includes(supportNumber)) {
+      return (
+        signature.length === 2 && signature.every((type) => type === "internal")
+      );
+    }
+
+    if (supportNumber === 6) {
+      return signature.length === 1;
+    }
+
+    if (supportNumber === 7) {
+      return signature.length === 1 && signature[0] === "internal";
+    }
   }
 
   return false;
@@ -1992,6 +2121,8 @@ const builtInHashOnlySupportOperatorTypeNames = new Set([
 ]);
 
 const builtInBtreeCrossTypeSupportOperatorTypePairs = new Set([
+  "date,timestamp",
+  "date,timestamptz",
   "float4,float8",
   "float8,float4",
   "int2,int4",
@@ -2000,6 +2131,10 @@ const builtInBtreeCrossTypeSupportOperatorTypePairs = new Set([
   "int4,int8",
   "int8,int2",
   "int8,int4",
+  "timestamp,date",
+  "timestamp,timestamptz",
+  "timestamptz,date",
+  "timestamptz,timestamp",
 ]);
 
 const typeRefMatchesBuiltInSupportOperatorType = (
@@ -3001,6 +3136,18 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int2div", [["int2", "int2"]]],
   ["int2ne", [["int2", "int2"]]],
   ["int2um", [["int2"]]],
+  ["int24eq", [["int2", "int4"]]],
+  ["int24ge", [["int2", "int4"]]],
+  ["int24gt", [["int2", "int4"]]],
+  ["int24le", [["int2", "int4"]]],
+  ["int24lt", [["int2", "int4"]]],
+  ["int24ne", [["int2", "int4"]]],
+  ["int28eq", [["int2", "int8"]]],
+  ["int28ge", [["int2", "int8"]]],
+  ["int28gt", [["int2", "int8"]]],
+  ["int28le", [["int2", "int8"]]],
+  ["int28lt", [["int2", "int8"]]],
+  ["int28ne", [["int2", "int8"]]],
   ["int4eq", [["int4", "int4"]]],
   ["int4ge", [["int4", "int4"]]],
   ["int4gt", [["int4", "int4"]]],
@@ -3012,6 +3159,18 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int4div", [["int4", "int4"]]],
   ["int4ne", [["int4", "int4"]]],
   ["int4um", [["int4"]]],
+  ["int42eq", [["int4", "int2"]]],
+  ["int42ge", [["int4", "int2"]]],
+  ["int42gt", [["int4", "int2"]]],
+  ["int42le", [["int4", "int2"]]],
+  ["int42lt", [["int4", "int2"]]],
+  ["int42ne", [["int4", "int2"]]],
+  ["int48eq", [["int4", "int8"]]],
+  ["int48ge", [["int4", "int8"]]],
+  ["int48gt", [["int4", "int8"]]],
+  ["int48le", [["int4", "int8"]]],
+  ["int48lt", [["int4", "int8"]]],
+  ["int48ne", [["int4", "int8"]]],
   ["int8eq", [["int8", "int8"]]],
   ["int8ge", [["int8", "int8"]]],
   ["int8gt", [["int8", "int8"]]],
@@ -3023,6 +3182,18 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int8div", [["int8", "int8"]]],
   ["int8ne", [["int8", "int8"]]],
   ["int8um", [["int8"]]],
+  ["int82eq", [["int8", "int2"]]],
+  ["int82ge", [["int8", "int2"]]],
+  ["int82gt", [["int8", "int2"]]],
+  ["int82le", [["int8", "int2"]]],
+  ["int82lt", [["int8", "int2"]]],
+  ["int82ne", [["int8", "int2"]]],
+  ["int84eq", [["int8", "int4"]]],
+  ["int84ge", [["int8", "int4"]]],
+  ["int84gt", [["int8", "int4"]]],
+  ["int84le", [["int8", "int4"]]],
+  ["int84lt", [["int8", "int4"]]],
+  ["int84ne", [["int8", "int4"]]],
   ["interval_eq", [["interval", "interval"]]],
   ["interval_ge", [["interval", "interval"]]],
   ["interval_gt", [["interval", "interval"]]],

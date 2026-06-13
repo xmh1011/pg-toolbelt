@@ -180,7 +180,8 @@ export const typeFromTypeNameNode = (
       }
     }
 
-    return createObjectRefFromAst("type", arrayName, typeRef.schema);
+    const arrayRef = createObjectRefFromAst("type", arrayName, typeRef.schema);
+    return hasExplicitSchema ? markExplicitSchemaRef(arrayRef) : arrayRef;
   }
   return typeRef;
 };

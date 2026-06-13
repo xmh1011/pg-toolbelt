@@ -1397,6 +1397,9 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
 const isHashSupportFunctionName = (name: string): boolean =>
   name.startsWith("hash") || name.includes("_hash");
 
+const isHashExtendedSupportFunctionName = (name: string): boolean =>
+  isHashSupportFunctionName(name) && name.endsWith("extended");
+
 const builtInOperatorClassSupportFunctionMatchesSlot = (
   name: string,
   signature: string[],
@@ -1448,7 +1451,11 @@ const builtInOperatorClassSupportFunctionMatchesSlot = (
     }
 
     if (supportNumber === 2) {
-      return signature.length === 2 && signature[1] === "int8";
+      return (
+        signature.length === 2 &&
+        signature[1] === "int8" &&
+        isHashExtendedSupportFunctionName(name)
+      );
     }
   }
 

@@ -102,6 +102,12 @@ const addImplicitRangeOperatorClassDependencies = (
       ) === true
     );
   };
+  const hasExternalSubtypeProvider = (subtypeRef: ObjectRef): boolean =>
+    externalProviders?.some(
+      (providerRef) =>
+        providerRef.kind === "type" &&
+        objectRefKey(providerRef) === objectRefKey(subtypeRef),
+    ) === true;
 
   for (let index = 0; index < statementNodes.length; index += 1) {
     const statementNode = statementNodes[index];
@@ -146,6 +152,7 @@ const addImplicitRangeOperatorClassDependencies = (
     if (
       rangeOperatorClassRefs.size === 0 &&
       !hasExternalDefaultBtreeOperatorClass(effectiveSubtypeRef) &&
+      !hasExternalSubtypeProvider(effectiveSubtypeRef) &&
       !hasPgCatalogDefaultBtreeOperatorClassForSubtype(
         subtypeRef,
         extractionContext,

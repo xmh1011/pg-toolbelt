@@ -2779,6 +2779,38 @@ describe("range type dependencies", () => {
     expect(rangeIndex).toBeGreaterThan(domainIndex);
   }, 120000);
 
+  test("uses public domain base types for omitted range opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create type price_range as range (subtype = price);",
+      "create domain price as numeric;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const missingDefault = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.message.includes(
+          "No default btree operator class provider found for range subtype 'price'",
+        ),
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const domainIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create domain price"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type price_range"),
+    );
+
+    expect(missingDefault).toHaveLength(0);
+    expect(executionErrors).toHaveLength(0);
+    expect(domainIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(domainIndex);
+  }, 120000);
+
   test("does not require producers for pg_catalog pattern support operators", async () => {
     const result = await analyzeAndSort([
       "create operator class app.text_pattern_ops for type text using btree as operator 1 ~<~ (text, text), operator 2 ~<=~ (text, text), operator 3 = (text, text), operator 4 ~>=~ (text, text), operator 5 ~>~ (text, text), function 1 bttext_pattern_cmp(text, text);",
@@ -2833,6 +2865,43 @@ describe("range type dependencies", () => {
       signature: "(public.int4,public.int4)",
     });
   });
+
+  test("does not require producers for built-in BRIN comparison support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_brin_ops for type int4 using brin as operator 1 < (int4, int4), operator 2 <= (int4, int4), operator 3 = (int4, int4), operator 4 >= (int4, int4), operator 5 > (int4, int4), function 1 brin_minmax_opcinfo(internal);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolvedComparisonOperators = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ["<", "<=", "=", ">=", ">"].includes(ref.name) &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.int4_brin_ops"),
+    );
+
+    expect(unresolvedComparisonOperators).toHaveLength(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual(
+      expect.objectContaining({
+        kind: "operator",
+        schema: "public",
+        signature: "(public.int4,public.int4)",
+      }),
+    );
+    expect(executionErrors).toHaveLength(0);
+  }, 120000);
 
   test("requires built-in support operators only when PostgreSQL has the signature", async () => {
     const result = await analyzeAndSort([
@@ -3878,6 +3947,78 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("does not require producers for unqualified built-in base type callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create type app.widget (input = app.widget_in, output = app.widget_out, analyze = array_typanalyze, subscript = array_subscript_handler, internallength = 4, alignment = int4);",
+      "create function app.widget_out(value app.widget) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.widget_in(value cstring) returns app.widget language internal immutable strict as 'int4in';",
+      "create type app.widget;",
+      "create schema app;",
+    ]);
+    const unresolvedBuiltInCallbacks = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ["array_typanalyze", "array_subscript_handler"].includes(
+              ref.name,
+            ) &&
+            ref.signature === "(internal)",
+        ) === true,
+    );
+    const baseTypeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.widget ("),
+    );
+
+    expect(unresolvedBuiltInCallbacks).toHaveLength(0);
+    expect(baseTypeStatement?.requires).not.toContainEqual(
+      expect.objectContaining({
+        kind: "function",
+        schema: "public",
+        signature: "(internal)",
+      }),
+    );
+  });
+
+  test("preserves schema-qualified base type callbacks with built-in names", async () => {
+    const result = await analyzeAndSort([
+      "create type app.widget (input = app.widget_in, output = app.widget_out, analyze = public.array_typanalyze, internallength = 4, alignment = int4);",
+      "create function app.widget_out(value app.widget) returns cstring language internal immutable strict as 'int4out';",
+      "create function app.widget_in(value cstring) returns app.widget language internal immutable strict as 'int4in';",
+      "create type app.widget;",
+      "create schema app;",
+    ]);
+    const localCallback = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "array_typanalyze" &&
+            ref.signature === "(internal)",
+        ) === true,
+    );
+    const baseTypeStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.widget ("),
+    );
+
+    expect(localCallback).toHaveLength(1);
+    expect(
+      baseTypeStatement?.requires.some(
+        (ref) =>
+          ref.kind === "function" &&
+          ref.schema === "public" &&
+          ref.name === "array_typanalyze" &&
+          ref.signature === "(internal)" &&
+          ref.exactKind === true &&
+          ref.exactSignature === true,
+      ),
+    ).toBe(true);
+  });
+
   test("does not require producer statements for built-in operator implementation functions", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = texteq, leftarg = text, rightarg = text);",
@@ -4427,6 +4568,37 @@ describe("range type dependencies", () => {
     );
 
     expect(unresolved).toHaveLength(0);
+  });
+
+  test("diagnoses btree-only pattern families used by hash opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.text_hash_ops for type text using hash family pg_catalog.text_pattern_ops as operator 1 = (text, text), function 1 hashtext(text);",
+      "create schema app;",
+    ]);
+    const invalidHashFamily = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_family" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "text_pattern_ops" &&
+            ref.signature === "(hash)",
+        ) === true,
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.text_hash_ops"),
+    );
+
+    expect(invalidHashFamily).toHaveLength(1);
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "operator_family",
+      schema: "pg_catalog",
+      name: "text_pattern_ops",
+      signature: "(hash)",
+    });
   });
 
   test("diagnoses invalid pg_catalog range support functions", async () => {

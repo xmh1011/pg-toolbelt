@@ -126,6 +126,22 @@ describe("signaturesCompatible", () => {
     ).toBe(false);
   });
 
+  test("does not match explicit public shadow types to bare built-in signatures", () => {
+    const options = { requireExactArity: true };
+
+    expect(signaturesCompatible("(int4)", "(public.int4)", options)).toBe(
+      false,
+    );
+    expect(signaturesCompatible("(public.int4)", "(int4)", options)).toBe(
+      false,
+    );
+    expect(
+      signaturesCompatible("(cstring,oid,int4)", "(cstring,oid,public.int4)", {
+        requireExactArity: true,
+      }),
+    ).toBe(false);
+  });
+
   test("matches unqualified built-in providers for pg_catalog requirements", () => {
     const options = { requireExactArity: true };
 

@@ -6644,6 +6644,266 @@ describe("range type dependencies", () => {
     expect(missingAccessMethod).toHaveLength(1);
   });
 
+  test("does not match opclass support operators against public shadow types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator class app.int4_ops for type int4 using btree as operator 1 app.<;",
+        "create type public.int4 as (value integer);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "operator",
+            schema: "app",
+            name: "<",
+            signature: "(public.int4,public.int4)",
+          },
+        ],
+      },
+    );
+    const missingCatalogOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<",
+        ) === true,
+    );
+
+    expect(missingCatalogOperator).toHaveLength(1);
+  });
+
+  test("does not match inferred opclass support functions against public shadow types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator class app.int4_ops for type int4 using btree as function 1 app.cmp;",
+        "create type public.int4 as (value integer);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "cmp",
+            signature: "(public.int4,public.int4)",
+          },
+        ],
+      },
+    );
+    const missingCatalogFunction = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "cmp",
+        ) === true,
+    );
+
+    expect(missingCatalogFunction).toHaveLength(1);
+  });
+
+  test("requires access method handlers with the internal handler signature", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create access method myam type index handler app.myam_handler;",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "myam_handler",
+            signature: "(text)",
+          },
+        ],
+      },
+    );
+    const missingHandler = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "myam_handler" &&
+            ref.signature === "(internal)",
+        ) === true,
+    );
+
+    expect(missingHandler).toHaveLength(1);
+  });
+
+  test("requires index access methods for operator families and classes", async () => {
+    const tableAccessMethodResult = await analyzeAndSort(
+      [
+        "create operator family app.table_family using myam;",
+        "create access method myam type table handler app.myam_handler;",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "myam_handler",
+            signature: "(internal)",
+          },
+        ],
+      },
+    );
+    const heapAccessMethodResult = await analyzeAndSort([
+      "create operator family app.heap_family using heap;",
+      "create schema app;",
+    ]);
+    const missingTableIndexMethod = tableAccessMethodResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "access_method" &&
+            ref.name === "myam" &&
+            ref.signature === "(index)",
+        ) === true,
+    );
+    const missingHeapIndexMethod = heapAccessMethodResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "access_method" &&
+            ref.name === "heap" &&
+            ref.signature === "(index)",
+        ) === true,
+    );
+
+    expect(missingTableIndexMethod).toHaveLength(1);
+    expect(missingHeapIndexMethod).toHaveLength(1);
+  });
+
+  test("does not let catalog-typed operators satisfy public shadow opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.public_int4_ops for type public.int4 using btree as operator 1 app.<;",
+      "create operator app.< (function = app.lt, leftarg = int4, rightarg = int4);",
+      "create function app.lt(a int4, b int4) returns boolean language sql immutable strict as $$ select false $$;",
+      "create type public.int4 as (value integer);",
+      "create schema app;",
+    ]);
+    const missingPublicOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+
+    expect(missingPublicOperator).toHaveLength(1);
+  });
+
+  test("does not report unresolved built-in access method comments", async () => {
+    const result = await analyzeAndSort([
+      "comment on access method btree is 'built-in btree access method';",
+      "comment on access method heap is 'built-in heap access method';",
+    ]);
+    const missingBuiltInAccessMethods = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "access_method" &&
+            ["btree", "heap"].includes(ref.name),
+        ) === true,
+    );
+
+    expect(missingBuiltInAccessMethods).toHaveLength(0);
+  });
+
+  test("does not match base type callbacks against public shadow catalog args", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create type app.score (input = app.score_in, output = app.score_out);",
+        "create type public.int4 as (value integer);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "score_in",
+            signature: "(cstring,oid,public.int4)",
+          },
+          {
+            kind: "function",
+            schema: "app",
+            name: "score_out",
+            signature: "(app.score)",
+          },
+        ],
+      },
+    );
+    const missingCatalogCallback = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_in",
+        ) === true,
+    );
+
+    expect(missingCatalogCallback).toHaveLength(1);
+  });
+
+  test("does not match operator estimators against public shadow catalog args", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator app.< (function = app.lt, leftarg = int4, rightarg = int4, restrict = app.score_sel);",
+        "create type public.int4 as (value integer);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "lt",
+            signature: "(int4,int4)",
+          },
+          {
+            kind: "function",
+            schema: "app",
+            name: "score_sel",
+            signature: "(internal,oid,internal,public.int4)",
+          },
+        ],
+      },
+    );
+    const missingCatalogEstimator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_sel",
+        ) === true,
+    );
+
+    expect(missingCatalogEstimator).toHaveLength(1);
+  });
+
   test("diagnoses base types that copy themselves through type options", async () => {
     const likeResult = await analyzeAndSort([
       "create type app.foo (input = app.foo_in, output = app.foo_out, like = app.foo);",

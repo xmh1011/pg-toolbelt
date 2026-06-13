@@ -208,6 +208,7 @@ export const createObjectRefFromAst = (
 const markObjectRefFlag = (
   ref: ObjectRef,
   key:
+    | "exactKind"
     | "exactSignature"
     | "omitIfNoLocalProducer"
     | "implicitProvider"
@@ -220,6 +221,12 @@ const markObjectRefFlag = (
   });
   return ref;
 };
+
+export const markExactKindRef = (ref: ObjectRef): ObjectRef =>
+  markObjectRefFlag(ref, "exactKind");
+
+export const requiresExactKind = (ref: ObjectRef): boolean =>
+  ref.exactKind === true;
 
 export const markExactSignatureRef = (ref: ObjectRef): ObjectRef =>
   markObjectRefFlag(ref, "exactSignature");

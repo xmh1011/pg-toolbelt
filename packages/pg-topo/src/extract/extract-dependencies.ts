@@ -6,6 +6,7 @@ import {
   dedupeObjectRefs,
   isBuiltInObjectRef,
   markAlternativeRef,
+  markExactKindRef,
   markExactSignatureRef,
   markImplicitProviderRef,
   markOmitIfNoLocalProducerRef,
@@ -2003,12 +2004,19 @@ const addTypeKey = (typeKeys: Set<string>, typeRef: ObjectRef | null): void => {
     return;
   }
   typeKeys.add(
-    objectRefKey(createObjectRefFromAst("type", typeRef.name, typeRef.schema)),
+    objectRefKey(
+      createObjectRefFromAst(
+        "type",
+        typeRef.name,
+        typeRef.schema ?? DEFAULT_SCHEMA,
+      ),
+    ),
   );
 };
 
 export const createExtractionContext = (
   astNodes: readonly unknown[],
+  externalProviders: readonly ObjectRef[] = [],
 ): ExtractionContext => {
   const enumTypeKeys = new Set<string>();
   const rangeTypeKeys = new Set<string>();
@@ -2075,6 +2083,25 @@ export const createExtractionContext = (
           rangeRef.schema,
         ),
       );
+    }
+  }
+
+  for (const providerRef of externalProviders) {
+    if (providerRef.kind !== "type") {
+      continue;
+    }
+    const typeRef = createObjectRefFromAst(
+      "type",
+      providerRef.name,
+      providerRef.schema ?? DEFAULT_SCHEMA,
+    );
+    const signature = providerRef.signature?.trim().toLowerCase();
+    if (signature === "(enum)") {
+      addTypeKey(enumTypeKeys, typeRef);
+    } else if (signature === "(range)") {
+      addTypeKey(rangeTypeKeys, typeRef);
+    } else if (signature === "(multirange)") {
+      addTypeKey(multirangeTypeKeys, typeRef);
     }
   }
 
@@ -2266,6 +2293,15 @@ const extractCreateRangeDependencies = (
           }
         } else {
           requires.push(collationRef);
+          if (collationRef.schema?.toLowerCase() === "pg_catalog") {
+            diagnostics.push({
+              code: "UNRESOLVED_DEPENDENCY",
+              message: `No pg_catalog collation '${collationRef.name}' found for range type.`,
+              objectRefs: [collationRef],
+              suggestedFix:
+                "Use a valid pg_catalog collation or create the referenced collation explicitly in a user schema.",
+            });
+          }
         }
       }
       continue;
@@ -2399,6 +2435,7 @@ const operatorImplementationFunctionOptionNames = new Set([
   "procedure",
 ]);
 const operatorEstimatorFunctionOptionNames = new Set(["restrict", "join"]);
+const operatorLinkOptionNames = new Set(["commutator", "negator"]);
 const builtInRestrictEstimatorFunctionNames = new Set([
   "areasel",
   "contsel",
@@ -2498,6 +2535,7 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["int4gt", [["int4", "int4"]]],
   ["int4le", [["int4", "int4"]]],
   ["int4lt", [["int4", "int4"]]],
+  ["int4pl", [["int4", "int4"]]],
   ["int4ne", [["int4", "int4"]]],
   ["int4um", [["int4"]]],
   ["int8eq", [["int8", "int8"]]],
@@ -2809,6 +2847,17 @@ const extractCreateOperatorDependencies = (
       continue;
     }
 
+    if (operatorLinkOptionNames.has(optionName)) {
+      const linkedOperatorNameParts = extractNameParts(
+        asRecord(asRecord(defElem.arg)?.List)?.items,
+      );
+      if (linkedOperatorNameParts.length > 1) {
+        const schemaName = linkedOperatorNameParts.slice(0, -1).join(".");
+        requires.push(createObjectRefFromAst("schema", schemaName));
+      }
+      continue;
+    }
+
     if (optionName === "leftarg") {
       leftArgRef = typeFromTypeNameNode(typeName);
       if (leftArgRef) {
@@ -2852,14 +2901,16 @@ const extractCreateOperatorDependencies = (
 
   const functionRef = objectFromNameParts("function", functionNameParts);
   if (functionRef) {
-    const exactFunctionRef = markExactSignatureRef(
-      createObjectRefFromAst(
-        "function",
-        functionRef.name,
-        functionRef.schema,
-        functionSignatureParts.length > 0
-          ? `(${functionSignatureParts.join(",")})`
-          : undefined,
+    const exactFunctionRef = markExactKindRef(
+      markExactSignatureRef(
+        createObjectRefFromAst(
+          "function",
+          functionRef.name,
+          functionRef.schema,
+          functionSignatureParts.length > 0
+            ? `(${functionSignatureParts.join(",")})`
+            : undefined,
+        ),
       ),
     );
 
@@ -3057,6 +3108,15 @@ const extractCreateOperatorClassDependencies = (
               ? markOmitIfNoLocalProducerRef(orderFamilyRequirement)
               : orderFamilyRequirement,
           );
+          if (orderFamilyRef.schema?.toLowerCase() === "pg_catalog") {
+            diagnostics.push({
+              code: "UNRESOLVED_DEPENDENCY",
+              message: `No pg_catalog btree operator family '${orderFamilyRef.name}' found for ORDER BY support.`,
+              objectRefs: [orderFamilyRequirement],
+              suggestedFix:
+                "Use a valid pg_catalog btree operator family or create the operator family explicitly in a user schema.",
+            });
+          }
         }
       }
 

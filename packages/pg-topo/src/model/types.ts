@@ -56,6 +56,7 @@ export type ObjectRef = {
   schema?: string;
   name: string;
   signature?: string;
+  exactKind?: boolean;
   exactSignature?: boolean;
   omitIfNoLocalProducer?: boolean;
   alternativeKey?: string;

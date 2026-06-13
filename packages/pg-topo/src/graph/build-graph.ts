@@ -8,6 +8,7 @@ import {
   isBuiltInObjectRef,
   isShellTypeRef,
   objectRefKey,
+  requiresExactKind,
   requiresExactSignature,
 } from "../model/object-ref.ts";
 import type {
@@ -91,6 +92,9 @@ const externalProviderSatisfies = (
     return false;
   }
   for (const provider of candidates) {
+    if (requiresExactKind(requiredRef) && provider.kind !== requiredRef.kind) {
+      continue;
+    }
     if (!isKindCompatible(requiredRef.kind, provider.kind)) {
       continue;
     }
@@ -131,6 +135,12 @@ const candidateObjectKeysForRequirement = (
       continue;
     }
     for (const providedRef of node.provides) {
+      if (
+        requiresExactKind(requiredRef) &&
+        providedRef.kind !== requiredRef.kind
+      ) {
+        continue;
+      }
       if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
         continue;
       }
@@ -167,6 +177,12 @@ const producerIndicesForRequirement = (
 
     const hasMatchingProvide = node.provides.some((providedRef) => {
       if (isShellTypeRef(providedRef)) {
+        return false;
+      }
+      if (
+        requiresExactKind(requiredRef) &&
+        providedRef.kind !== requiredRef.kind
+      ) {
         return false;
       }
       if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
@@ -206,6 +222,12 @@ const hasCompatibleProvidedObject = (
   providedRefs: ObjectRef[],
 ): boolean =>
   providedRefs.some((providedRef) => {
+    if (
+      requiresExactKind(requiredRef) &&
+      providedRef.kind !== requiredRef.kind
+    ) {
+      return false;
+    }
     if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
       return false;
     }

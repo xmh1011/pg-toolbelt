@@ -22,6 +22,7 @@ import {
 import {
   isImplicitProvider,
   objectRefKey,
+  requiresExactKind,
   requiresExactSignature,
   shouldOmitIfNoLocalProducer,
 } from "./model/object-ref.ts";
@@ -84,6 +85,7 @@ const addImplicitRangeOperatorClassDependencies = (
 ): void => {
   const extractionContext = createExtractionContext(
     parsedStatements.map((statement) => statement.ast),
+    externalProviders,
   );
   const hasExternalDefaultBtreeOperatorClass = (
     subtypeRef: ObjectRef,
@@ -266,6 +268,12 @@ const omitRequirementsWithoutLocalProducers = (
 
     for (const statementNode of statementNodes) {
       for (const providedRef of statementNode.provides) {
+        if (
+          requiresExactKind(requiredRef) &&
+          providedRef.kind !== requiredRef.kind
+        ) {
+          continue;
+        }
         if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
           continue;
         }
@@ -433,6 +441,7 @@ export const analyzeAndSort = async (
   const statementNodes: StatementNode[] = [];
   const extractionContext = createExtractionContext(
     parsedStatements.map((statement) => statement.ast),
+    options?.externalProviders,
   );
   for (const parsedStatement of parsedStatements) {
     const statementClass = classifyStatement(parsedStatement.ast);

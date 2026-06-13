@@ -1261,6 +1261,40 @@ describe("range type dependencies", () => {
     });
   });
 
+  test("does not satisfy exact range callbacks with polymorphic overloads", async () => {
+    const result = await analyzeAndSort([
+      "create type app.score_range as range (subtype = int4, canonical = app.score_canonical, subtype_diff = app.score_diff);",
+      "create function app.score_canonical(value anyrange) returns anyrange language sql immutable as $$ select value $$;",
+      "create function app.score_diff(left_value anyelement, right_value anyelement) returns float8 language sql immutable as $$ select 0::float8 $$;",
+      "create schema app;",
+    ]);
+    const unresolvedCanonicalDependency = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_canonical" &&
+            ref.signature === "(app.score_range)",
+        ) === true,
+    );
+    const unresolvedSubtypeDiffDependency = result.diagnostics.find(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_diff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+        ) === true,
+    );
+
+    expect(unresolvedCanonicalDependency).toBeDefined();
+    expect(unresolvedSubtypeDiffDependency).toBeDefined();
+  });
+
   test("requires custom opclass functions when built-in names use different argument types", async () => {
     const result = await analyzeAndSort([
       "create operator class app.uuid_range_ops for type uuid using btree as operator 1 < (uuid, uuid), operator 2 <= (uuid, uuid), operator 3 = (uuid, uuid), operator 4 >= (uuid, uuid), operator 5 > (uuid, uuid), function 1 btint4cmp(uuid, uuid);",
@@ -5818,6 +5852,30 @@ describe("range type dependencies", () => {
     expect(unresolved).toHaveLength(0);
   });
 
+  test("accepts generated array typnames for polymorphic range opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create type app.mood_range as range (subtype = app._mood, subtype_opclass = pg_catalog.array_ops);",
+      "create type app.mood as enum ('sad', 'ok', 'happy');",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const enumIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.mood as enum"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.mood_range"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(enumIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(enumIndex);
+  });
+
   test("diagnoses invalid pg_catalog operator argument types", async () => {
     const result = await analyzeAndSort(
       [
@@ -6414,6 +6472,39 @@ describe("range type dependencies", () => {
     expect(enumIndex).toBeGreaterThanOrEqual(0);
     expect(rangeIndex).toBeGreaterThan(enumIndex);
     expect(tableIndex).toBeGreaterThan(rangeIndex);
+  });
+
+  test("orders explicit multiranges before colliding generated array typnames", async () => {
+    const result = await analyzeAndSort([
+      "create type app.foo as enum ('low', 'high');",
+      "create table app.uses_foo(value app.foo);",
+      "create type app.foo_range as range (subtype = int4, multirange_type_name = app._foo);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const duplicateCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "DUPLICATE_PRODUCER",
+    ).length;
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.foo_range"),
+    );
+    const enumIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.foo as enum"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.uses_foo"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(duplicateCount).toBe(0);
+    expect(rangeIndex).toBeGreaterThanOrEqual(0);
+    expect(enumIndex).toBeGreaterThan(rangeIndex);
+    expect(tableIndex).toBeGreaterThan(enumIndex);
   });
 
   test("external type providers satisfy generated array typname aliases", async () => {

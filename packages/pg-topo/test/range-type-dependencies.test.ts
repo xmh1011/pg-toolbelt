@@ -4571,6 +4571,35 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(typeIndex);
   });
 
+  test("provides generated array typname aliases for custom types", async () => {
+    const result = await analyzeAndSort([
+      "create table app.people(id int primary key, moods app._mood not null);",
+      "create type app.mood as enum ('sad', 'ok', 'happy');",
+      "create schema app;",
+    ]);
+    const unresolvedArrayAlias = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" && ref.schema === "app" && ref.name === "_mood",
+        ) === true,
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const typeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.mood as enum"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.people"),
+    );
+
+    expect(unresolvedArrayAlias).toHaveLength(0);
+    expect(typeIndex).toBeGreaterThanOrEqual(0);
+    expect(tableIndex).toBeGreaterThan(typeIndex);
+  });
+
   test("accepts explicit pg_catalog enum_ops for external enum range subtypes", async () => {
     const result = await analyzeAndSort(
       [
@@ -5241,6 +5270,26 @@ describe("range type dependencies", () => {
     expect(unresolvedBrinMinmax).toHaveLength(0);
   });
 
+  test("accepts built-in datetime cross-type support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.date_timestamp_ops for type date using btree family pg_catalog.datetime_ops as operator 1 < (date, timestamp), function 1 date_cmp(date, date);",
+      "create schema app;",
+    ]);
+    const unresolvedDatetimeOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "<" &&
+            ref.signature === "(date,pg_catalog.timestamp)",
+        ) === true,
+    );
+
+    expect(unresolvedDatetimeOperator).toHaveLength(0);
+  });
+
   test("matches typmod input functions with array argument providers", async () => {
     const result = await analyzeAndSort([
       "create type app.widget (input = app.widget_in, output = app.widget_out, typmod_in = app.widget_typmod_in, typmod_out = app.widget_typmod_out, internallength = 4, alignment = int4);",
@@ -5536,6 +5585,75 @@ describe("range type dependencies", () => {
     expect(unresolvedGinJsonbOperators).toHaveLength(0);
   });
 
+  test("accepts shipped GiST support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.box_gist_ops for type box using gist family pg_catalog.box_ops as function 1 gist_box_consistent(internal, box, smallint, oid, internal);",
+      "create schema app;",
+    ]);
+    const unresolvedGistFunction = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "gist_box_consistent" &&
+            ref.signature === "(internal,box,pg_catalog.int2,oid,internal)",
+        ) === true,
+    );
+
+    expect(unresolvedGistFunction).toHaveLength(0);
+  });
+
+  test("accepts shipped GIN support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.array_gin_ops for type anyarray using gin family pg_catalog.array_ops as function 2 ginarrayextract(anyarray, internal, internal), function 3 ginqueryarrayextract(anyarray, internal, smallint, internal, internal, internal, internal), function 4 ginarrayconsistent(internal, smallint, anyarray, int4, internal, internal, internal, internal), function 6 ginarraytriconsistent(internal, smallint, anyarray, int4, internal, internal, internal);",
+      "create schema app;",
+    ]);
+    const unresolvedGinFunctions = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            [
+              "ginarrayextract",
+              "ginqueryarrayextract",
+              "ginarrayconsistent",
+              "ginarraytriconsistent",
+            ].includes(ref.name),
+        ) === true,
+    );
+
+    expect(unresolvedGinFunctions).toHaveLength(0);
+  });
+
+  test("accepts shipped SP-GiST support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.text_spgist_ops for type text using spgist family pg_catalog.text_ops as function 1 spg_text_config(internal, internal), function 2 spg_text_choose(internal, internal), function 3 spg_text_picksplit(internal, internal), function 4 spg_text_inner_consistent(internal, internal), function 5 spg_text_leaf_consistent(internal, internal);",
+      "create schema app;",
+    ]);
+    const unresolvedSpgistFunctions = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            [
+              "spg_text_config",
+              "spg_text_choose",
+              "spg_text_picksplit",
+              "spg_text_inner_consistent",
+              "spg_text_leaf_consistent",
+            ].includes(ref.name),
+        ) === true,
+    );
+
+    expect(unresolvedSpgistFunctions).toHaveLength(0);
+  });
+
   test("diagnoses invalid pg_catalog operator class data types", async () => {
     const result = await analyzeAndSort([
       "create operator class app.bad_ops for type pg_catalog.no_such using gist as operator 1 << (box, box);",
@@ -5604,6 +5722,26 @@ describe("range type dependencies", () => {
     );
 
     expect(unresolvedFamily).toHaveLength(0);
+  });
+
+  test("accepts built-in cross-width integer operator callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.< (function = int48lt, leftarg = int4, rightarg = int8);",
+      "create schema app;",
+    ]);
+    const unresolvedIntegerCallback = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "int48lt" &&
+            ref.signature === "(int4,int8)",
+        ) === true,
+    );
+
+    expect(unresolvedIntegerCallback).toHaveLength(0);
   });
 
   test("does not require built-in schemas for operator link refs", async () => {

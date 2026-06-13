@@ -102,11 +102,27 @@ const addImplicitRangeOperatorClassDependencies = (
       ) === true
     );
   };
-  const hasExternalSubtypeProvider = (subtypeRef: ObjectRef): boolean =>
+  const externalSubtypeSignatureHasDefaultBtreeOperatorClass = (
+    signature?: string,
+  ): boolean => {
+    const normalizedSignature = signature?.trim().toLowerCase();
+    return (
+      normalizedSignature === "(enum)" ||
+      normalizedSignature === "(range)" ||
+      normalizedSignature === "(multirange)"
+    );
+  };
+  const hasExternalSubtypeDefaultBtreeOperatorClass = (
+    subtypeRef: ObjectRef,
+  ): boolean =>
     externalProviders?.some(
       (providerRef) =>
         providerRef.kind === "type" &&
-        objectRefKey(providerRef) === objectRefKey(subtypeRef),
+        providerRef.schema === subtypeRef.schema &&
+        providerRef.name === subtypeRef.name &&
+        externalSubtypeSignatureHasDefaultBtreeOperatorClass(
+          providerRef.signature,
+        ),
     ) === true;
 
   for (let index = 0; index < statementNodes.length; index += 1) {
@@ -152,7 +168,7 @@ const addImplicitRangeOperatorClassDependencies = (
     if (
       rangeOperatorClassRefs.size === 0 &&
       !hasExternalDefaultBtreeOperatorClass(effectiveSubtypeRef) &&
-      !hasExternalSubtypeProvider(effectiveSubtypeRef) &&
+      !hasExternalSubtypeDefaultBtreeOperatorClass(effectiveSubtypeRef) &&
       !hasPgCatalogDefaultBtreeOperatorClassForSubtype(
         subtypeRef,
         extractionContext,

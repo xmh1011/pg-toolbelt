@@ -159,6 +159,37 @@ describe("diagnostics", () => {
     expect(unresolvedArrayType).toHaveLength(0);
   });
 
+  test("external range providers satisfy generated multirange requirements", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create schema app;",
+        "create table app.events(spans app.period_multirange);",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "type",
+            schema: "app",
+            name: "period",
+            signature: "(range)",
+          },
+        ],
+      },
+    );
+    const unresolvedMultirangeType = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "period_multirange",
+        ) === true,
+    );
+
+    expect(unresolvedMultirangeType).toHaveLength(0);
+  });
+
   test("external domain providers satisfy generated array type requirements", async () => {
     const result = await analyzeAndSort(
       [
@@ -230,6 +261,10 @@ describe("diagnostics", () => {
       "create schema app;",
       "create type app.r as range (subtype = app.r[]);",
     ]);
+    const rangeMultirangeResult = await analyzeAndSort([
+      "create schema app;",
+      "create type app.r as range (subtype = app.r_multirange);",
+    ]);
     const domainResult = await analyzeAndSort([
       "create schema app;",
       "create domain app.email_domain as app.email_domain[];",
@@ -252,6 +287,16 @@ describe("diagnostics", () => {
             ref.kind === "type" && ref.schema === "app" && ref.name === "r[]",
         ) === true,
     );
+    const selfRangeMultirange = rangeMultirangeResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "r_multirange",
+        ) === true,
+    );
     const selfDomainArray = domainResult.diagnostics.filter(
       (diagnostic) =>
         diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
@@ -265,6 +310,7 @@ describe("diagnostics", () => {
 
     expect(selfTableArray).toHaveLength(1);
     expect(selfRangeArray).toHaveLength(1);
+    expect(selfRangeMultirange).toHaveLength(1);
     expect(selfDomainArray).toHaveLength(1);
   });
 

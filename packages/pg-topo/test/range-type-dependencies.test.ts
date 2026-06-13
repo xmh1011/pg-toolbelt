@@ -2919,6 +2919,42 @@ describe("range type dependencies", () => {
     expect(executionErrors).toHaveLength(0);
   }, 120000);
 
+  test("does not require producers for built-in BRIN bloom equality operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_brin_bloom_ops for type int4 using brin family pg_catalog.integer_bloom_ops as operator 1 = (int4, int4), function 1 brin_bloom_opcinfo(internal);",
+      "create schema app;",
+    ]);
+    const validation = await validateAnalyzeResultWithPostgres(result);
+    const unresolvedBloomEquality = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "=" &&
+            ref.signature === "(public.int4,public.int4)",
+        ) === true,
+    );
+    const executionErrors = validation.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "RUNTIME_EXECUTION_ERROR",
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.int4_brin_bloom_ops"),
+    );
+
+    expect(unresolvedBloomEquality).toHaveLength(0);
+    expect(operatorClassStatement?.requires).not.toContainEqual({
+      kind: "operator",
+      schema: "public",
+      name: "=",
+      signature: "(public.int4,public.int4)",
+    });
+    expect(executionErrors).toHaveLength(0);
+  }, 120000);
+
   test("requires built-in support operators only when PostgreSQL has the signature", async () => {
     const result = await analyzeAndSort([
       "create operator class app.point_ops for type point using btree as operator 1 < (point, point), function 1 app.point_cmp(point, point);",
@@ -5005,6 +5041,29 @@ describe("range type dependencies", () => {
     );
 
     expect(unresolvedBrinMinmax).toHaveLength(0);
+  });
+
+  test("accepts non-minmax built-in brin support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_brin_bloom_ops for type int4 using brin as operator 1 = (int4, int4), function 1 brin_bloom_opcinfo(internal);",
+      "create operator class app.range_brin_multi_ops for type int4range using brin as operator 1 << (int4range, int4range), function 1 brin_minmax_multi_opcinfo(internal);",
+      "create schema app;",
+    ]);
+    const unresolvedBrinSupportFunctions = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ["brin_bloom_opcinfo", "brin_minmax_multi_opcinfo"].includes(
+              ref.name,
+            ) &&
+            ref.signature === "(public.internal)",
+        ) === true,
+    );
+
+    expect(unresolvedBrinSupportFunctions).toHaveLength(0);
   });
 
   test("does not require producers for unqualified BRIN minmax support routines", async () => {

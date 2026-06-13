@@ -2522,6 +2522,8 @@ const builtInRestrictEstimatorFunctionNames = new Set([
   "neqsel",
   "nlikesel",
   "positionsel",
+  "scalargesel",
+  "scalarlesel",
   "scalarltsel",
   "scalargtsel",
 ]);
@@ -2537,6 +2539,8 @@ const builtInJoinEstimatorFunctionNames = new Set([
   "neqjoinsel",
   "nlikejoinsel",
   "positionjoinsel",
+  "scalargejoinsel",
+  "scalarlejoinsel",
   "scalarltjoinsel",
   "scalargtjoinsel",
 ]);
@@ -3376,6 +3380,18 @@ const extractCreateBaseTypeDependencies = (
       const typeRef = typeFromTypeNameNode(asRecord(defElem.arg)?.TypeName);
       if (typeRef) {
         requires.push(typeRef);
+        if (
+          typeRef.schema === "pg_catalog" &&
+          !isKnownBuiltInTypeName(typeRef.name)
+        ) {
+          diagnostics.push({
+            code: "UNRESOLVED_DEPENDENCY",
+            message: `No valid pg_catalog base type option type '${typeRef.name}' found for option '${optionName}'.`,
+            objectRefs: [typeRef],
+            suggestedFix:
+              "Use a valid pg_catalog type or create the referenced type explicitly in a user schema.",
+          });
+        }
       }
       continue;
     }

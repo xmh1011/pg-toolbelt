@@ -97,6 +97,7 @@ const addImplicitRangeOperatorClassDependencies = (
       externalProviders?.some(
         (providerRef) =>
           providerRef.kind === "operator_class" &&
+          providerRef.implicitProvider === true &&
           operatorClassSignaturesCompatible(
             `(btree,${subtypeSignature})`,
             providerRef.signature,

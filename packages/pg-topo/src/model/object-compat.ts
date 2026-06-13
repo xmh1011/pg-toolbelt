@@ -1,4 +1,5 @@
 import { splitTopLevel } from "../utils/split-top-level.ts";
+import { isKnownBuiltInTypeName } from "./object-ref.ts";
 import type { ObjectRef } from "./types.ts";
 
 export const isKindCompatible = (
@@ -113,7 +114,7 @@ const isBuiltInSignatureSchema = (schema: string | undefined): boolean =>
   schema === "pg_catalog" || schema === "public";
 
 const isKnownBuiltInSignatureType = (value: string): boolean =>
-  PG_TYPE_ALIASES[signatureArgBase(value)] !== undefined;
+  isKnownBuiltInTypeName(signatureArgBase(value));
 
 const schemaQualifiedBuiltInArgsCompatible = (
   requiredArg: string,

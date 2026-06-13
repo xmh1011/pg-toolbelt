@@ -121,7 +121,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "float8mi",
-      signature: "(pg_catalog.float8,pg_catalog.float8)",
+      signature: "(pg_catalog.float8,pg_catalog.float8)->float8",
     });
 
     const validation = await validateAnalyzeResultWithPostgres(result);
@@ -573,7 +573,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "btint4cmp",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->int4",
     });
     expect(typeIndex).toBeGreaterThanOrEqual(0);
     expect(supportFunctionIndex).toBeGreaterThan(typeIndex);
@@ -682,13 +682,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_sel",
-      signature: "(internal,oid,internal,int4)",
+      signature: "(internal,oid,internal,int4)->float8",
     });
     expect(operatorStatement?.requires).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_join",
-      signature: "(internal,oid,internal,int2,internal)",
+      signature: "(internal,oid,internal,int2,internal)->float8",
     });
 
     const validation = await validateAnalyzeResultWithPostgres(result);
@@ -745,13 +745,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_sel",
-      signature: "(internal,oid,internal,int4)",
+      signature: "(internal,oid,internal,int4)->float8",
     });
     expect(operatorStatement?.requires).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_join",
-      signature: "(internal,oid,internal,int2,internal)",
+      signature: "(internal,oid,internal,int2,internal)->float8",
     });
   });
 
@@ -776,13 +776,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_sel",
-      signature: "(internal,oid,internal,int4)",
+      signature: "(internal,oid,internal,int4)->float8",
     });
     expect(operatorStatement?.requires).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_join",
-      signature: "(internal,oid,internal,int2,internal)",
+      signature: "(internal,oid,internal,int2,internal)->float8",
     });
   });
 
@@ -855,7 +855,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "public" &&
             ref.name === "eqjoinsel" &&
-            ref.signature === "(internal,oid,internal,int4)",
+            ref.signature === "(internal,oid,internal,int4)->float8",
         ) === true,
     );
     const invalidJoinEstimator = result.diagnostics.filter(
@@ -866,7 +866,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "public" &&
             ref.name === "eqsel" &&
-            ref.signature === "(internal,oid,internal,int2,internal)",
+            ref.signature === "(internal,oid,internal,int2,internal)->float8",
         ) === true,
     );
     const operatorStatement = result.ordered.find((statement) =>
@@ -879,13 +879,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "eqjoinsel",
-      signature: "(internal,oid,internal,int4)",
+      signature: "(internal,oid,internal,int4)->float8",
     });
     expect(operatorStatement?.requires).toContainEqual({
       kind: "function",
       schema: "public",
       name: "eqsel",
-      signature: "(internal,oid,internal,int2,internal)",
+      signature: "(internal,oid,internal,int2,internal)->float8",
     });
   });
 
@@ -1126,7 +1126,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "float8mi",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->float8",
     });
 
     const validation = await validateAnalyzeResultWithPostgres(result);
@@ -1181,13 +1181,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_canonical",
-      signature: "(app.score_range)",
+      signature: "(app.score_range)->app.score_range",
     });
     expect(unresolvedCanonicalDependency?.objectRefs).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_canonical",
-      signature: "(app.score_range)",
+      signature: "(app.score_range)->app.score_range",
     });
   }, 120000);
 
@@ -1216,13 +1216,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_diff",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->float8",
     });
     expect(unresolvedSubtypeDiffDependency?.objectRefs).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_diff",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->float8",
     });
   }, 120000);
 
@@ -1251,13 +1251,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_canonical",
-      signature: "(app.score_range)",
+      signature: "(app.score_range)->app.score_range",
     });
     expect(unresolvedCanonicalDependency?.objectRefs).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_canonical",
-      signature: "(app.score_range)",
+      signature: "(app.score_range)->app.score_range",
     });
   });
 
@@ -1276,7 +1276,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "app" &&
             ref.name === "score_canonical" &&
-            ref.signature === "(app.score_range)",
+            ref.signature === "(app.score_range)->app.score_range",
         ) === true,
     );
     const unresolvedSubtypeDiffDependency = result.diagnostics.find(
@@ -1287,7 +1287,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "app" &&
             ref.name === "score_diff" &&
-            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
         ) === true,
     );
 
@@ -1315,7 +1315,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "btint4cmp",
-      signature: "(uuid,uuid)",
+      signature: "(uuid,uuid)->int4",
     });
 
     const validation = await validateAnalyzeResultWithPostgres(result);
@@ -1366,13 +1366,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_cmp",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->int4",
     });
     expect(unresolvedSupportFunction?.objectRefs).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_cmp",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->int4",
     });
   }, 120000);
 
@@ -1405,13 +1405,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_cmp",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->int4",
     });
     expect(unresolvedSupportFunction?.objectRefs).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_cmp",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->int4",
     });
   }, 120000);
 
@@ -1434,7 +1434,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "btint4sortsupport",
-      signature: "(internal)",
+      signature: "(internal)->void",
     });
   }, 120000);
 
@@ -1457,7 +1457,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "btint48cmp",
-      signature: "(int4,int8)",
+      signature: "(int4,int8)->int4",
     });
   });
 
@@ -1537,7 +1537,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "btscore_skipsupport",
-      signature: "(internal)",
+      signature: "(internal)->void",
     });
     expect(supportFunctionIndex).toBeGreaterThanOrEqual(0);
     expect(operatorClassIndex).toBeGreaterThan(supportFunctionIndex);
@@ -2221,7 +2221,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "uuid_cmp",
-      signature: "(uuid,uuid)",
+      signature: "(uuid,uuid)->int4",
     });
     expect(supportFunctionIndex).toBeGreaterThanOrEqual(0);
     expect(operatorClassIndex).toBeGreaterThan(supportFunctionIndex);
@@ -2260,7 +2260,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "btarraycmp",
-      signature: "(app.score[],app.score[])",
+      signature: "(app.score[],app.score[])->int4",
     });
   });
 
@@ -2540,7 +2540,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "uuid_cmp",
-      signature: "(uuid,uuid)",
+      signature: "(uuid,uuid)->int4",
     });
     expect(executionErrors).toHaveLength(0);
     expect(schemaIndex).toBeGreaterThanOrEqual(0);
@@ -2562,7 +2562,7 @@ describe("range type dependencies", () => {
           (ref) =>
             ref.kind === "function" &&
             ref.name === "range_cmp" &&
-            ref.signature === "(app.score,app.score)",
+            ref.signature === "(app.score,app.score)->int4",
         ) === true,
     );
     const operatorClassStatement = result.ordered.find((statement) =>
@@ -2576,7 +2576,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "range_cmp",
-      signature: "(app.score,app.score)",
+      signature: "(app.score,app.score)->int4",
     });
   });
 
@@ -2603,7 +2603,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "hashint4",
-      signature: "(int4)",
+      signature: "(int4)->int4",
     });
     expect(executionErrors).toHaveLength(0);
   }, 120000);
@@ -2621,7 +2621,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "public" &&
             ref.name === "hashint4" &&
-            ref.signature === "(int4)",
+            ref.signature === "(int4)->int4",
         ) === true,
     );
     const compareFunctionInBtreeSortSupportSlot = result.diagnostics.filter(
@@ -2632,7 +2632,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "public" &&
             ref.name === "btint4cmp" &&
-            ref.signature === "(int4,int4)",
+            ref.signature === "(int4,int4)->void",
         ) === true,
     );
     const operatorClassStatement = result.ordered.find((statement) =>
@@ -2647,13 +2647,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "public",
       name: "hashint4",
-      signature: "(int4)",
+      signature: "(int4)->int4",
     });
     expect(operatorClassStatement?.requires).toContainEqual({
       kind: "function",
       schema: "public",
       name: "btint4cmp",
-      signature: "(int4,int4)",
+      signature: "(int4,int4)->void",
     });
   });
 
@@ -4148,13 +4148,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_in",
-      signature: "(cstring)",
+      signature: "(cstring)->app.score",
     });
     expect(baseTypeStatement?.requires).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_out",
-      signature: "(app.score)",
+      signature: "(app.score)->cstring",
     });
   });
 
@@ -4184,13 +4184,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "widget_in",
-      signature: "(cstring)",
+      signature: "(cstring)->app.widget",
     });
     expect(unresolvedInputFunction?.objectRefs).toContainEqual({
       kind: "function",
       schema: "app",
       name: "widget_in",
-      signature: "(cstring)",
+      signature: "(cstring)->app.widget",
     });
   });
 
@@ -4214,7 +4214,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "widget_in",
-      signature: "(cstring,oid,int4)",
+      signature: "(cstring,oid,int4)->app.widget",
     });
   });
 
@@ -4240,7 +4240,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "widget_recv",
-      signature: "(internal,oid,int4)",
+      signature: "(internal,oid,int4)->app.widget",
     });
   });
 
@@ -4274,7 +4274,7 @@ describe("range type dependencies", () => {
       expect.objectContaining({
         kind: "function",
         schema: "public",
-        signature: "(internal)",
+        signature: "(internal)->bool",
       }),
     );
   });
@@ -4295,7 +4295,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "public" &&
             ref.name === "array_typanalyze" &&
-            ref.signature === "(internal)",
+            ref.signature === "(internal)->bool",
         ) === true,
     );
     const baseTypeStatement = result.ordered.find((statement) =>
@@ -4309,7 +4309,7 @@ describe("range type dependencies", () => {
           ref.kind === "function" &&
           ref.schema === "public" &&
           ref.name === "array_typanalyze" &&
-          ref.signature === "(internal)" &&
+          ref.signature === "(internal)->bool" &&
           ref.exactKind === true &&
           ref.exactSignature === true,
       ),
@@ -4331,8 +4331,8 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "pg_catalog" &&
             ref.name === "no_such_in" &&
-            (ref.signature === "(cstring)" ||
-              ref.signature === "(cstring,oid,int4)"),
+            (ref.signature === "(cstring)->app.widget" ||
+              ref.signature === "(cstring,oid,int4)->app.widget"),
         ) === true,
     );
 
@@ -4458,7 +4458,7 @@ describe("range type dependencies", () => {
         kind: "function",
         schema: "public",
         name: "eqsel",
-        signature: "(internal,oid,internal,int4)",
+        signature: "(internal,oid,internal,int4)->float8",
       }),
     );
     expect(functionIndex).toBeGreaterThanOrEqual(0);
@@ -4533,7 +4533,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "pg_catalog" &&
             ref.name === "hashint4" &&
-            ref.signature === "(int4)",
+            ref.signature === "(int4)->int4",
         ) === true,
     );
 
@@ -4836,6 +4836,31 @@ describe("range type dependencies", () => {
     expect(tableIndex).toBeGreaterThan(enumIndex);
     expect(consumerIndex).toBeGreaterThan(enumIndex);
   }, 120000);
+
+  test("includes external relation row types in implicit array collision context", async () => {
+    const result = await analyzeAndSort(
+      ["create table app.foo(id int primary key, value app._foo not null);"],
+      {
+        externalProviders: [{ kind: "table", schema: "app", name: "_foo" }],
+      },
+    );
+    const missingExternalRowType = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" && ref.schema === "app" && ref.name === "_foo",
+        ) === true,
+    );
+    const selfReferenceDiagnostics = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.message.includes("cannot reference its own row type"),
+    );
+
+    expect(missingExternalRowType).toHaveLength(0);
+    expect(selfReferenceDiagnostics).toHaveLength(0);
+  });
 
   test("provides generated array typname aliases for custom types", async () => {
     const result = await analyzeAndSort([
@@ -5250,7 +5275,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "pg_catalog" &&
             ref.name === "daterange_subdiff" &&
-            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
         ) === true,
     );
 
@@ -5334,7 +5359,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "pg_catalog" &&
             ref.name === "eqjoinsel" &&
-            ref.signature === "(internal,oid,internal,int4)",
+            ref.signature === "(internal,oid,internal,int4)->float8",
         ) === true,
     );
 
@@ -5354,7 +5379,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "pg_catalog" &&
             ref.name === "nope" &&
-            ref.signature === "(internal,oid,internal,int4)",
+            ref.signature === "(internal,oid,internal,int4)->float8",
         ) === true,
     );
 
@@ -5479,7 +5504,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "public" &&
             ref.name === "btint48cmp" &&
-            ref.signature === "(int4,int8)",
+            ref.signature === "(int4,int8)->int8",
         ) === true,
     );
 
@@ -5623,13 +5648,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "widget_typmod_in",
-      signature: "(cstring[])",
+      signature: "(cstring[])->int4",
     });
     expect(typmodFunctionStatement?.provides).toContainEqual({
       kind: "function",
       schema: "app",
       name: "widget_typmod_in",
-      signature: "(cstring[])",
+      signature: "(cstring[])->int4",
     });
   });
 
@@ -5659,13 +5684,13 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "score_array_cmp",
-      signature: "(app.score[],app.score[])",
+      signature: "(app.score[],app.score[])->int4",
     });
     expect(functionStatement?.provides).toContainEqual({
       kind: "function",
       schema: "app",
       name: "score_array_cmp",
-      signature: "(app.score[],app.score[])",
+      signature: "(app.score[],app.score[])->int4",
     });
   });
 
@@ -5689,7 +5714,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "app" &&
             ref.name === "diff" &&
-            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
         ) === true,
     );
     const opclassCallback = opclassResult.diagnostics.filter(
@@ -5700,7 +5725,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "app" &&
             ref.name === "score_cmp" &&
-            ref.signature === "(app.score,app.score)",
+            ref.signature === "(app.score,app.score)->int4",
         ) === true,
     );
 
@@ -5749,7 +5774,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "app" &&
             ref.name === "diff" &&
-            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
         ) === true,
     );
     const rangeStatement = result.ordered.find((statement) =>
@@ -5761,7 +5786,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "diff",
-      signature: "(pg_catalog.int4,pg_catalog.int4)",
+      signature: "(pg_catalog.int4,pg_catalog.int4)->float8",
     });
   });
 
@@ -5780,7 +5805,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "app" &&
             ref.name === "diff" &&
-            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
         ) === true,
     );
     const rangeStatement = result.ordered.find((statement) =>
@@ -5792,7 +5817,7 @@ describe("range type dependencies", () => {
       kind: "function",
       schema: "app",
       name: "diff",
-      signature: "(pg_catalog.int4,pg_catalog.int4)",
+      signature: "(pg_catalog.int4,pg_catalog.int4)->float8",
     });
   });
 
@@ -6264,7 +6289,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "pg_catalog" &&
             ref.name === "no_such" &&
-            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
         ) === true,
     );
 
@@ -6505,6 +6530,39 @@ describe("range type dependencies", () => {
     expect(rangeIndex).toBeGreaterThanOrEqual(0);
     expect(enumIndex).toBeGreaterThan(rangeIndex);
     expect(tableIndex).toBeGreaterThan(enumIndex);
+  });
+
+  test("orders default multiranges before colliding generated array typnames", async () => {
+    const result = await analyzeAndSort([
+      "create type app.foo_multirange as enum ('low', 'high');",
+      "create table app.uses_foo(value app._foo_multirange);",
+      "create type app._foo_range as range (subtype = int4);",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const duplicateCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "DUPLICATE_PRODUCER",
+    ).length;
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app._foo_range"),
+    );
+    const enumIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.foo_multirange"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.uses_foo"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(duplicateCount).toBe(0);
+    expect(rangeIndex).toBeGreaterThanOrEqual(0);
+    expect(enumIndex).toBeGreaterThan(rangeIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
   });
 
   test("external type providers satisfy generated array typname aliases", async () => {
@@ -6822,7 +6880,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "app" &&
             ref.name === "myam_handler" &&
-            ref.signature === "(internal)",
+            ref.signature === "(internal)->index_am_handler",
         ) === true,
     );
 
@@ -6842,7 +6900,7 @@ describe("range type dependencies", () => {
             kind: "function",
             schema: "app",
             name: "myam_handler",
-            signature: "(internal)",
+            signature: "(internal)->table_am_handler",
           },
         ],
       },
@@ -6936,7 +6994,7 @@ describe("range type dependencies", () => {
             kind: "function",
             schema: "app",
             name: "score_out",
-            signature: "(app.score)",
+            signature: "(app.score)->cstring",
           },
         ],
       },
@@ -7021,5 +7079,156 @@ describe("range type dependencies", () => {
 
     expect(selfLike).toHaveLength(1);
     expect(selfElement).toHaveLength(1);
+  });
+
+  test("requires subtype_diff callbacks to return float8", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = int4, subtype_diff = app.diff);",
+      "create function app.diff(a int4, b int4) returns int4 language sql immutable as $$ select a - b $$;",
+      "create schema app;",
+    ]);
+    const missingDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
+        ) === true,
+    );
+
+    expect(missingDiff).toHaveLength(1);
+  });
+
+  test("requires operator estimator callbacks to return float8", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.<# (function = app.score_lt, leftarg = int4, rightarg = int4, restrict = app.score_sel);",
+      "create function app.score_sel(internal, oid, internal, int4) returns int4 language internal stable strict as 'eqsel';",
+      "create function app.score_lt(a int4, b int4) returns boolean language sql immutable strict as $$ select a < b $$;",
+      "create schema app;",
+    ]);
+    const missingEstimator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_sel" &&
+            ref.signature === "(internal,oid,internal,int4)->float8",
+        ) === true,
+    );
+
+    expect(missingEstimator).toHaveLength(1);
+  });
+
+  test("requires access method handlers to return the selected handler type", async () => {
+    const indexResult = await analyzeAndSort([
+      "create access method myindexam type index handler app.myam_handler;",
+      "create function app.myam_handler(internal) returns void language internal strict as 'bthandler';",
+      "create schema app;",
+    ]);
+    const tableResult = await analyzeAndSort([
+      "create access method mytableam type table handler app.myam_handler;",
+      "create function app.myam_handler(internal) returns void language internal strict as 'heap_tableam_handler';",
+      "create schema app;",
+    ]);
+    const missingIndexHandler = indexResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "myam_handler" &&
+            ref.signature === "(internal)->index_am_handler",
+        ) === true,
+    );
+    const missingTableHandler = tableResult.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "myam_handler" &&
+            ref.signature === "(internal)->table_am_handler",
+        ) === true,
+    );
+
+    expect(missingIndexHandler).toHaveLength(1);
+    expect(missingTableHandler).toHaveLength(1);
+  });
+
+  test("requires btree support function 1 callbacks to return int4", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using btree as function 1 app.score_cmp(app.score, app.score);",
+      "create function app.score_cmp(a app.score, b app.score) returns bool language sql immutable strict as $$ select (a).value = (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingComparator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_cmp" &&
+            ref.signature === "(app.score,app.score)->int4",
+        ) === true,
+    );
+
+    expect(missingComparator).toHaveLength(1);
+  });
+
+  test("requires base type callbacks to return PostgreSQL callback types", async () => {
+    const result = await analyzeAndSort([
+      "create type app.score (input = app.score_in, output = app.score_out, send = app.score_send, internallength = 4, alignment = int4);",
+      "create function app.score_in(value cstring) returns int4 language internal immutable strict as 'int4in';",
+      "create function app.score_out(value app.score) returns text language internal immutable strict as 'int4out';",
+      "create function app.score_send(value app.score) returns text language internal immutable strict as 'int4send';",
+      "create type app.score;",
+      "create schema app;",
+    ]);
+    const missingInput = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_in" &&
+            ref.signature === "(cstring)->app.score",
+        ) === true,
+    );
+    const missingOutput = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_out" &&
+            ref.signature === "(app.score)->cstring",
+        ) === true,
+    );
+    const missingSend = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_send" &&
+            ref.signature === "(app.score)->bytea",
+        ) === true,
+    );
+
+    expect(missingInput).toHaveLength(1);
+    expect(missingOutput).toHaveLength(1);
+    expect(missingSend).toHaveLength(1);
   });
 });

@@ -161,6 +161,30 @@ describe("signaturesCompatible", () => {
     ).toBe(false);
   });
 
+  test("requires provider return types when the requirement specifies one", () => {
+    const options = { requireExactArity: true };
+
+    expect(
+      signaturesCompatible(
+        "(int4,int4)->float8",
+        "(int4,int4)->float8",
+        options,
+      ),
+    ).toBe(true);
+    expect(
+      signaturesCompatible("(int4,int4)->float8", "(int4,int4)->int4", options),
+    ).toBe(false);
+    expect(
+      signaturesCompatible("(int4,int4)->float8", "(int4,int4)", options),
+    ).toBe(false);
+  });
+
+  test("ignores provider return types when the requirement omits one", () => {
+    expect(signaturesCompatible("(int4,int4)", "(int4,int4)->float8")).toBe(
+      true,
+    );
+  });
+
   test("single-arg unknown matches any single-param or multi-param provider", () => {
     expect(signaturesCompatible("(unknown)", "(bigint)")).toBe(true);
     expect(signaturesCompatible("(unknown)", "(bigint,text)")).toBe(true);

@@ -159,6 +159,44 @@ describe("diagnostics", () => {
     expect(unresolvedArrayType).toHaveLength(0);
   });
 
+  test("external domain providers satisfy generated array type requirements", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create schema app;",
+        "create table app.events(emails app.email_domain[]);",
+        "create table app.audit(emails app.other_domain[]);",
+      ],
+      {
+        externalProviders: [
+          { kind: "domain", schema: "app", name: "email_domain" },
+        ],
+      },
+    );
+    const providedDomainArray = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "email_domain[]",
+        ) === true,
+    );
+    const unrelatedDomainArray = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "other_domain[]",
+        ) === true,
+    );
+
+    expect(providedDomainArray).toHaveLength(0);
+    expect(unrelatedDomainArray).toHaveLength(1);
+  });
+
   test("external operator class providers satisfy omitted range subtype defaults", async () => {
     const sql = [
       "create schema app;",

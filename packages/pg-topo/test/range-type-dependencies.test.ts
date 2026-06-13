@@ -4019,6 +4019,29 @@ describe("range type dependencies", () => {
     ).toBe(true);
   });
 
+  test("diagnoses unknown pg_catalog base type callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create type app.widget (input = pg_catalog.no_such_in, output = app.widget_out, internallength = 4, alignment = int4);",
+      "create function app.widget_out(value app.widget) returns cstring language internal immutable strict as 'int4out';",
+      "create type app.widget;",
+      "create schema app;",
+    ]);
+    const unknownCallback = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "no_such_in" &&
+            (ref.signature === "(cstring)" ||
+              ref.signature === "(cstring,oid,int4)"),
+        ) === true,
+    );
+
+    expect(unknownCallback.length).toBeGreaterThan(0);
+  });
+
   test("does not require producer statements for built-in operator implementation functions", async () => {
     const result = await analyzeAndSort([
       "create operator app.=== (function = texteq, leftarg = text, rightarg = text);",
@@ -4621,6 +4644,26 @@ describe("range type dependencies", () => {
     expect(invalidRangeSupportFunction).toHaveLength(1);
   });
 
+  test("diagnoses missing pg_catalog range subtype opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create type app.r as range (subtype = int4, subtype_opclass = pg_catalog.nope);",
+      "create schema app;",
+    ]);
+    const invalidRangeOperatorClass = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator_class" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "nope" &&
+            ref.signature === "(btree,int4)",
+        ) === true,
+    );
+
+    expect(invalidRangeOperatorClass).toHaveLength(1);
+  });
+
   test("accepts record image support operators", async () => {
     const result = await analyzeAndSort([
       "create operator class app.record_image_ops for type record using btree as operator 1 *< (record, record), operator 2 *<= (record, record), operator 3 *= (record, record), operator 4 *>= (record, record), operator 5 *> (record, record), function 1 btrecordimagecmp(record, record);",
@@ -4662,6 +4705,26 @@ describe("range type dependencies", () => {
     );
 
     expect(invalidQualifiedEstimator).toHaveLength(1);
+  });
+
+  test("diagnoses unknown pg_catalog operator estimators", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.=== (function = texteq, leftarg = text, rightarg = text, restrict = pg_catalog.nope);",
+      "create schema app;",
+    ]);
+    const unknownEstimator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "nope" &&
+            ref.signature === "(internal,oid,internal,int4)",
+        ) === true,
+    );
+
+    expect(unknownEstimator).toHaveLength(1);
   });
 
   test("accepts hash-only built-in equality operators", async () => {
@@ -4787,6 +4850,26 @@ describe("range type dependencies", () => {
     );
 
     expect(invalidHashSupportFunction).toHaveLength(1);
+  });
+
+  test("accepts built-in brin minmax support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_brin_ops for type int4 using brin as operator 1 < (int4, int4), operator 2 <= (int4, int4), operator 3 = (int4, int4), operator 4 >= (int4, int4), operator 5 > (int4, int4), function 1 brin_minmax_opcinfo(internal);",
+      "create schema app;",
+    ]);
+    const unresolvedBrinMinmax = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "brin_minmax_opcinfo" &&
+            ref.signature === "(internal)",
+        ) === true,
+    );
+
+    expect(unresolvedBrinMinmax).toHaveLength(0);
   });
 
   test("matches typmod input functions with array argument providers", async () => {

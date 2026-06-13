@@ -86,6 +86,9 @@ const BUILTIN_TYPES = new Set([
   "xid8",
 ]);
 
+export const isKnownBuiltInTypeName = (name: string): boolean =>
+  BUILTIN_TYPES.has(name.toLowerCase());
+
 export const DEFAULT_SCHEMA = "public";
 
 type IdentifierSource = "raw" | "ast";

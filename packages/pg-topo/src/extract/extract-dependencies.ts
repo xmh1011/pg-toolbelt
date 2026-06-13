@@ -5,6 +5,7 @@ import {
   DEFAULT_SCHEMA,
   dedupeObjectRefs,
   isBuiltInObjectRef,
+  isKnownBuiltInTypeName,
   markAlternativeRef,
   markExactKindRef,
   markExactSignatureRef,
@@ -70,6 +71,7 @@ const extractCreateTableDependencies = (
 ): ExtractDependenciesResult => {
   const provides: ObjectRef[] = [];
   const requires: ObjectRef[] = [];
+  const diagnostics: Diagnostic[] = [];
   const relation = asRecord(statementNode.relation);
   const tableRef = relationFromRangeVarNode(relation, "table");
   if (tableRef) {
@@ -103,6 +105,19 @@ const extractCreateTableDependencies = (
       const typeRef = typeFromTypeNameNode(columnDefinition.typeName);
       if (typeRef) {
         requires.push(typeRef);
+        if (
+          tableRef &&
+          typeRef.kind === "type" &&
+          typeRef.schema === tableRef.schema &&
+          typeRef.name === tableRef.name
+        ) {
+          diagnostics.push(
+            selfReferenceDiagnostic(
+              typeRef,
+              `Table '${tableRef.schema ? `${tableRef.schema}.` : ""}${tableRef.name}' cannot reference its own row type before it exists.`,
+            ),
+          );
+        }
       }
 
       const constraints = Array.isArray(columnDefinition.constraints)
@@ -162,7 +177,7 @@ const extractCreateTableDependencies = (
     }
   }
 
-  return { provides, requires };
+  return { provides, requires, diagnostics };
 };
 
 const extractCreateTableAsDependencies = (
@@ -807,6 +822,31 @@ const isBuiltInRangeCollationName = (nameParts: string[]): boolean => {
 const isPgCatalogQualifiedName = (nameParts: string[]): boolean =>
   nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog";
 
+const isPgCatalogRef = (ref: ObjectRef | null | undefined): boolean =>
+  ref?.schema?.toLowerCase() === "pg_catalog";
+
+const unresolvedCatalogDiagnostic = (
+  message: string,
+  objectRef: ObjectRef,
+  suggestedFix: string,
+): Diagnostic => ({
+  code: "UNRESOLVED_DEPENDENCY",
+  message,
+  objectRefs: [objectRef],
+  suggestedFix,
+});
+
+const selfReferenceDiagnostic = (
+  objectRef: ObjectRef,
+  message: string,
+): Diagnostic => ({
+  code: "UNRESOLVED_DEPENDENCY",
+  message,
+  objectRefs: [objectRef],
+  suggestedFix:
+    "Create the referenced type in a separate earlier statement or use a different existing type.",
+});
+
 // Common pg_catalog btree operator classes that can be used as range
 // SUBTYPE_OPCLASS values without an input CREATE OPERATOR CLASS statement.
 const builtInRangeOperatorClassNames = new Set([
@@ -942,18 +982,6 @@ const isBuiltInRangeSupportFunctionName = (
       signature.every((typeName, index) =>
         typeRefMatchesBuiltInNames(args[index] ?? null, [typeName]),
       ),
-  );
-};
-
-const isPgCatalogQualifiedKnownRangeSupportFunctionName = (
-  nameParts: string[],
-): boolean => {
-  const name = nameParts.at(-1)?.toLowerCase();
-  return (
-    nameParts.length === 2 &&
-    nameParts[0]?.toLowerCase() === "pg_catalog" &&
-    name !== undefined &&
-    builtInRangeSupportFunctionSignatures.has(name)
   );
 };
 
@@ -1810,20 +1838,6 @@ const isBuiltInOperatorClassSupportOperatorName = (
   );
 };
 
-const isPgCatalogQualifiedKnownOperatorClassSupportOperatorName = (
-  nameParts: string[],
-): boolean => {
-  const name = nameParts.at(-1)?.toLowerCase();
-  return (
-    nameParts.length === 2 &&
-    nameParts[0]?.toLowerCase() === "pg_catalog" &&
-    name !== undefined &&
-    (builtInOperatorClassSupportOperatorNames.has(name) ||
-      builtInPatternOperatorClassSupportOperatorNames.has(name) ||
-      builtInRecordImageOperatorClassSupportOperatorNames.has(name))
-  );
-};
-
 const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
 const textEncoder = new TextEncoder();
 
@@ -1910,6 +1924,16 @@ const operatorClassSignature = (
 const operatorClassIdentitySignature = (
   accessMethod: string,
 ): string | undefined => (accessMethod ? `(${accessMethod})` : undefined);
+
+const operatorFamilySignature = (accessMethod: string): string | undefined => {
+  const trimmed = accessMethod.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.startsWith("(") && trimmed.endsWith(")")
+    ? trimmed
+    : `(${trimmed})`;
+};
 
 const objectWithArgsTypeRefs = (
   objectWithArgs: unknown,
@@ -2313,6 +2337,19 @@ const extractCreateRangeDependencies = (
       const typeRef = typeFromTypeNameNode(typeName);
       if (typeRef) {
         requires.push(typeRef);
+        if (
+          rangeRef &&
+          typeRef.kind === "type" &&
+          typeRef.schema === rangeRef.schema &&
+          typeRef.name === rangeRef.name
+        ) {
+          diagnostics.push(
+            selfReferenceDiagnostic(
+              typeRef,
+              `Range type '${rangeRef.schema ? `${rangeRef.schema}.` : ""}${rangeRef.name}' cannot use itself as its subtype.`,
+            ),
+          );
+        }
       }
       continue;
     }
@@ -2428,9 +2465,7 @@ const extractCreateRangeDependencies = (
         }
 
         requires.push(exactFunctionRef);
-        if (
-          isPgCatalogQualifiedKnownRangeSupportFunctionName(functionNameParts)
-        ) {
+        if (isPgCatalogQualifiedName(functionNameParts)) {
           diagnostics.push({
             code: "UNRESOLVED_DEPENDENCY",
             message: `No valid pg_catalog range support function '${functionRef.name}' found for range option '${optionName}'.`,
@@ -2774,18 +2809,6 @@ const isBuiltInOperatorImplementationFunctionName = (
   );
 };
 
-const isPgCatalogQualifiedKnownOperatorImplementationFunctionName = (
-  nameParts: string[],
-): boolean => {
-  const name = nameParts.at(-1)?.toLowerCase();
-  return (
-    nameParts.length === 2 &&
-    nameParts[0]?.toLowerCase() === "pg_catalog" &&
-    name !== undefined &&
-    builtInOperatorImplementationFunctionSignatures.has(name)
-  );
-};
-
 const extractCreateOperatorDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -2942,11 +2965,7 @@ const extractCreateOperatorDependencies = (
       }
     } else {
       requires.push(exactFunctionRef);
-      if (
-        isPgCatalogQualifiedKnownOperatorImplementationFunctionName(
-          functionNameParts,
-        )
-      ) {
+      if (isPgCatalogQualifiedName(functionNameParts)) {
         diagnostics.push({
           code: "UNRESOLVED_DEPENDENCY",
           message: `No valid pg_catalog operator implementation function '${functionRef.name}' found for operator signature '${exactFunctionRef.signature ?? "unknown"}'.`,
@@ -2983,7 +3002,7 @@ const extractCreateOperatorFamilyDependencies = (
         "operator_family",
         operatorFamilyRef.name,
         operatorFamilyRef.schema,
-        accessMethod || undefined,
+        operatorFamilySignature(accessMethod),
       ),
     );
     if (operatorFamilyRef.schema) {
@@ -3038,7 +3057,7 @@ const extractCreateOperatorClassDependencies = (
             "operator_family",
             operatorClassRef.name,
             operatorClassRef.schema,
-            accessMethod || undefined,
+            operatorFamilySignature(accessMethod),
           ),
         ),
       );
@@ -3055,7 +3074,7 @@ const extractCreateOperatorClassDependencies = (
       "operator_family",
       operatorFamilyRef.name,
       operatorFamilyRef.schema,
-      accessMethod || undefined,
+      operatorFamilySignature(accessMethod),
     );
     if (
       !isBuiltInOperatorFamilyNameForAccessMethod(
@@ -3168,9 +3187,7 @@ const extractCreateOperatorClassDependencies = (
       const operatorRef = objectWithArgsRef("operator", itemName, operatorArgs);
       if (operatorRef) {
         requires.push(operatorRef);
-        if (
-          isPgCatalogQualifiedKnownOperatorClassSupportOperatorName(nameParts)
-        ) {
+        if (isPgCatalogQualifiedName(nameParts)) {
           diagnostics.push({
             code: "UNRESOLVED_DEPENDENCY",
             message: `No valid pg_catalog support operator '${operatorRef.name}' found for access method '${accessMethod || "unknown"}' strategy number ${itemNumber}.`,
@@ -3229,13 +3246,7 @@ const extractCreateOperatorClassDependencies = (
           markExactSignatureRef(functionRef),
         );
         requires.push(exactFunctionRef);
-        const functionName = nameParts.at(-1)?.toLowerCase();
-        if (
-          nameParts.length === 2 &&
-          nameParts[0]?.toLowerCase() === "pg_catalog" &&
-          functionName &&
-          builtInOperatorClassSupportFunctionSignatures.has(functionName)
-        ) {
+        if (isPgCatalogQualifiedName(nameParts)) {
           diagnostics.push({
             code: "UNRESOLVED_DEPENDENCY",
             message: `No valid pg_catalog support function '${functionRef.name}' found for access method '${accessMethod || "unknown"}' support number ${itemNumber}.`,
@@ -3252,6 +3263,18 @@ const extractCreateOperatorClassDependencies = (
       const storageTypeRef = typeFromTypeNameNode(item.storedtype);
       if (storageTypeRef) {
         requires.push(storageTypeRef);
+        if (
+          isPgCatalogRef(storageTypeRef) &&
+          !isKnownBuiltInTypeName(storageTypeRef.name)
+        ) {
+          diagnostics.push(
+            unresolvedCatalogDiagnostic(
+              `No pg_catalog storage type '${storageTypeRef.name}' found for operator class.`,
+              storageTypeRef,
+              "Use an existing pg_catalog storage type or create the referenced type explicitly in a user schema.",
+            ),
+          );
+        }
       }
     }
   }

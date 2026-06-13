@@ -6387,6 +6387,153 @@ describe("range type dependencies", () => {
     expect(duplicateMultirangeName.length).toBeGreaterThan(0);
   });
 
+  test("orders default multirange arrays after colliding type owners", async () => {
+    const result = await analyzeAndSort([
+      "create type app.price_range as range (subtype = int4);",
+      "create table app.uses_price(spans app.price_multirange);",
+      "create type app._price_multirange as enum ('low', 'high');",
+      "create schema app;",
+    ]);
+    const unresolved = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNRESOLVED_DEPENDENCY",
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const enumIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app._price_multirange"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.price_range"),
+    );
+    const tableIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create table app.uses_price"),
+    );
+
+    expect(unresolved).toHaveLength(0);
+    expect(enumIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(enumIndex);
+    expect(tableIndex).toBeGreaterThan(rangeIndex);
+  });
+
+  test("external type providers satisfy generated array typname aliases", async () => {
+    const result = await analyzeAndSort(
+      ["create table app.events(score app._score);", "create schema app;"],
+      {
+        externalProviders: [{ kind: "type", schema: "app", name: "score" }],
+      },
+    );
+    const unresolvedGeneratedArray = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "app" &&
+            ref.name === "_score",
+        ) === true,
+    );
+
+    expect(unresolvedGeneratedArray).toHaveLength(0);
+  });
+
+  test("orders operator families after custom access methods", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator family app.score_family using myam;",
+        "create access method myam type index handler app.myam_handler;",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          { kind: "function", schema: "app", name: "myam_handler" },
+        ],
+      },
+    );
+    const unknownCount = result.diagnostics.filter(
+      (diagnostic) => diagnostic.code === "UNKNOWN_STATEMENT_CLASS",
+    ).length;
+    const unresolvedAccessMethod = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) => ref.kind === "access_method" && ref.name === "myam",
+        ) === true,
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const accessMethodIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create access method myam"),
+    );
+    const familyIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create operator family app.score_family"),
+    );
+
+    expect(unknownCount).toBe(0);
+    expect(unresolvedAccessMethod).toHaveLength(0);
+    expect(accessMethodIndex).toBeGreaterThanOrEqual(0);
+    expect(familyIndex).toBeGreaterThan(accessMethodIndex);
+  });
+
+  test("catalog-qualifies built-in operator callback argument signatures", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.< (function = app.lt, leftarg = int4, rightarg = int4);",
+      "create function app.lt(a public.int4, b public.int4) returns boolean language sql immutable strict as $$ select false $$;",
+      "create type public.int4 as (value integer);",
+      "create schema app;",
+    ]);
+    const missingCatalogCallback = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "lt" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)",
+        ) === true,
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<"),
+    );
+
+    expect(missingCatalogCallback).toHaveLength(1);
+    expect(operatorStatement?.requires).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "lt",
+      signature: "(pg_catalog.int4,pg_catalog.int4)",
+    });
+  });
+
+  test("does not require producers for built-in array operator callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.&& (function = arrayoverlap, leftarg = anyarray, rightarg = anyarray);",
+      "create operator app.@> (function = arraycontains, leftarg = anyarray, rightarg = anyarray);",
+      "create operator app.<@ (function = arraycontained, leftarg = anyarray, rightarg = anyarray);",
+      "create operator app.=== (function = array_eq, leftarg = anyarray, rightarg = anyarray);",
+      "create schema app;",
+    ]);
+    const unresolvedArrayCallbacks = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            [
+              "array_eq",
+              "arraycontained",
+              "arraycontains",
+              "arrayoverlap",
+            ].includes(ref.name),
+        ) === true,
+    );
+
+    expect(unresolvedArrayCallbacks).toHaveLength(0);
+  });
+
   test("diagnoses base types that copy themselves through type options", async () => {
     const likeResult = await analyzeAndSort([
       "create type app.foo (input = app.foo_in, output = app.foo_out, like = app.foo);",

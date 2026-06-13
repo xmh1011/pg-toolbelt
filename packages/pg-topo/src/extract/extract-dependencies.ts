@@ -117,23 +117,41 @@ const addImplicitArrayCollisionDependency = (
   }
 };
 
-const relationRowTypeProviderRefs = (relationRef: ObjectRef): ObjectRef[] =>
-  typeProviderRefs(
-    createObjectRefFromAst("type", relationRef.name, relationRef.schema),
+const relationRowTypeRef = (relationRef: ObjectRef): ObjectRef =>
+  createObjectRefFromAst("type", relationRef.name, relationRef.schema);
+
+const relationRowTypeProviderRefs = (
+  relationRef: ObjectRef,
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
+): ObjectRef[] => typeProviderRefs(relationRowTypeRef(relationRef), context);
+
+const addRelationRowTypeCollisionDependency = (
+  relationRef: ObjectRef,
+  requires: ObjectRef[],
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
+): void => {
+  addImplicitArrayCollisionDependency(
+    relationRowTypeRef(relationRef),
+    requires,
+    context,
   );
+};
 
 const isSelfTypeReference = (
   createdTypeRef: ObjectRef,
   requiredTypeRef: ObjectRef,
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): boolean =>
   requiredTypeRef.kind === "type" &&
   requiredTypeRef.schema === createdTypeRef.schema &&
   (requiredTypeRef.name === createdTypeRef.name ||
     requiredTypeRef.name === `${createdTypeRef.name}[]` ||
-    requiredTypeRef.name === generatedArrayTypeName(createdTypeRef.name));
+    (requiredTypeRef.name === generatedArrayTypeName(createdTypeRef.name) &&
+      !hasCreatedType(context, requiredTypeRef)));
 
 const extractCreateTableDependencies = (
   statementNode: Record<string, unknown>,
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): ExtractDependenciesResult => {
   const provides: ObjectRef[] = [];
   const requires: ObjectRef[] = [];
@@ -142,7 +160,8 @@ const extractCreateTableDependencies = (
   const tableRef = relationFromRangeVarNode(relation, "table");
   if (tableRef) {
     provides.push(tableRef);
-    provides.push(...relationRowTypeProviderRefs(tableRef));
+    provides.push(...relationRowTypeProviderRefs(tableRef, context));
+    addRelationRowTypeCollisionDependency(tableRef, requires, context);
     addSchemaDependencyIfNeeded(relation?.schemaname, requires);
   }
 
@@ -171,7 +190,7 @@ const extractCreateTableDependencies = (
       const typeRef = typeFromTypeNameNode(columnDefinition.typeName);
       if (typeRef) {
         requires.push(typeRef);
-        if (tableRef && isSelfTypeReference(tableRef, typeRef)) {
+        if (tableRef && isSelfTypeReference(tableRef, typeRef, context)) {
           diagnostics.push(
             selfReferenceDiagnostic(
               typeRef,
@@ -244,6 +263,7 @@ const extractCreateTableDependencies = (
 const extractCreateTableAsDependencies = (
   statementNode: Record<string, unknown>,
   kind: "table" | "materialized_view",
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): ExtractDependenciesResult => {
   const provides: ObjectRef[] = [];
   const requires: ObjectRef[] = [];
@@ -256,7 +276,8 @@ const extractCreateTableAsDependencies = (
       createObjectRefFromAst(kind, relationRef.name, relationRef.schema),
     );
     if (kind === "table" || kind === "materialized_view") {
-      provides.push(...relationRowTypeProviderRefs(relationRef));
+      provides.push(...relationRowTypeProviderRefs(relationRef, context));
+      addRelationRowTypeCollisionDependency(relationRef, requires, context);
     }
     if (relationRef.schema) {
       requires.push(createObjectRefFromAst("schema", relationRef.schema));
@@ -435,6 +456,7 @@ const extractCreateFunctionDependencies = (
 const extractViewDependencies = (
   statementNode: Record<string, unknown>,
   kind: "view" | "materialized_view",
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): ExtractDependenciesResult => {
   const provides: ObjectRef[] = [];
   const requires: ObjectRef[] = [];
@@ -443,7 +465,8 @@ const extractViewDependencies = (
   const tableRef = relationFromRangeVarNode(viewRelation, "table");
   if (tableRef) {
     provides.push(createObjectRefFromAst(kind, tableRef.name, tableRef.schema));
-    provides.push(...relationRowTypeProviderRefs(tableRef));
+    provides.push(...relationRowTypeProviderRefs(tableRef, context));
+    addRelationRowTypeCollisionDependency(tableRef, requires, context);
     // A plain view implicitly owns an "_RETURN" ON SELECT rewrite rule. Expose it
     // so `COMMENT ON RULE "_RETURN" ON <view>` resolves to the view instead of
     // reporting an unresolved dependency. Materialized views have no such rule.
@@ -1379,8 +1402,8 @@ const builtInGinOperatorFamilyNames = new Set([
 const builtInGistOperatorFamilyNames = new Set([
   "box_ops",
   "circle_ops",
+  "inet_ops",
   "multirange_ops",
-  "network_ops",
   "point_ops",
   "poly_ops",
   "range_ops",
@@ -1390,8 +1413,8 @@ const builtInGistOperatorFamilyNames = new Set([
 
 const builtInSpgistOperatorFamilyNames = new Set([
   "box_ops",
+  "inet_ops",
   "kd_point_ops",
-  "network_ops",
   "poly_ops",
   "quad_point_ops",
   "range_ops",
@@ -2427,8 +2450,9 @@ const isRangeSelfTypeReference = (
   rangeRef: ObjectRef,
   requiredTypeRef: ObjectRef,
   explicitMultirangeRef?: ObjectRef | null,
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): boolean =>
-  isSelfTypeReference(rangeRef, requiredTypeRef) ||
+  isSelfTypeReference(rangeRef, requiredTypeRef, context) ||
   (requiredTypeRef.kind === "type" &&
     explicitMultirangeRef?.kind === "type" &&
     requiredTypeRef.schema === explicitMultirangeRef.schema &&
@@ -2743,6 +2767,40 @@ export const createExtractionContext = (
       relationFromRangeVarNode(asRecord(compositeStmt?.typevar), "type"),
     );
 
+    const createStmt = asRecord(astRecord?.CreateStmt);
+    const createStmtRelationRef = relationFromRangeVarNode(
+      asRecord(createStmt?.relation),
+      "table",
+    );
+    if (createStmtRelationRef) {
+      addCreatedTypeKey(
+        createdTypeKeys,
+        relationRowTypeRef(createStmtRelationRef),
+      );
+    }
+
+    const viewStmt = asRecord(astRecord?.ViewStmt);
+    const viewRelationRef = relationFromRangeVarNode(
+      asRecord(viewStmt?.view),
+      "table",
+    );
+    if (viewRelationRef) {
+      addCreatedTypeKey(createdTypeKeys, relationRowTypeRef(viewRelationRef));
+    }
+
+    const createTableAsStmt = asRecord(astRecord?.CreateTableAsStmt);
+    const intoClause = asRecord(createTableAsStmt?.into);
+    const createTableAsRelationRef = relationFromRangeVarNode(
+      asRecord(intoClause?.rel),
+      "table",
+    );
+    if (createTableAsRelationRef) {
+      addCreatedTypeKey(
+        createdTypeKeys,
+        relationRowTypeRef(createTableAsRelationRef),
+      );
+    }
+
     const rangeStmt = asRecord(astRecord?.CreateRangeStmt);
     const rangeRef = objectFromNameParts(
       "type",
@@ -3040,7 +3098,12 @@ const extractCreateRangeDependencies = (
         }
         if (
           rangeRef &&
-          isRangeSelfTypeReference(rangeRef, typeRef, explicitMultirangeRef)
+          isRangeSelfTypeReference(
+            rangeRef,
+            typeRef,
+            explicitMultirangeRef,
+            context,
+          )
         ) {
           diagnostics.push(
             selfReferenceDiagnostic(
@@ -3408,6 +3471,41 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["network_le", [["inet", "inet"]]],
   ["network_lt", [["inet", "inet"]]],
   ["network_ne", [["inet", "inet"]]],
+  [
+    "network_overlap",
+    [
+      ["inet", "inet"],
+      ["cidr", "cidr"],
+    ],
+  ],
+  [
+    "network_sub",
+    [
+      ["inet", "inet"],
+      ["cidr", "cidr"],
+    ],
+  ],
+  [
+    "network_subeq",
+    [
+      ["inet", "inet"],
+      ["cidr", "cidr"],
+    ],
+  ],
+  [
+    "network_sup",
+    [
+      ["inet", "inet"],
+      ["cidr", "cidr"],
+    ],
+  ],
+  [
+    "network_supeq",
+    [
+      ["inet", "inet"],
+      ["cidr", "cidr"],
+    ],
+  ],
   ["numeric_eq", [["numeric", "numeric"]]],
   ["numeric_ge", [["numeric", "numeric"]]],
   ["numeric_gt", [["numeric", "numeric"]]],
@@ -4195,7 +4293,7 @@ const extractCreateBaseTypeDependencies = (
       );
       if (optionTypeRef) {
         requires.push(optionTypeRef);
-        if (typeRef && isSelfTypeReference(typeRef, optionTypeRef)) {
+        if (typeRef && isSelfTypeReference(typeRef, optionTypeRef, context)) {
           diagnostics.push(
             selfReferenceDiagnostic(
               optionTypeRef,
@@ -4672,7 +4770,11 @@ const extractDependencyRefs = (
       if (domainRef) {
         addImplicitArrayCollisionDependency(domainRef, requires, context);
       }
-      if (domainRef && typeRef && isSelfTypeReference(domainRef, typeRef)) {
+      if (
+        domainRef &&
+        typeRef &&
+        isSelfTypeReference(domainRef, typeRef, context)
+      ) {
         diagnostics.push(
           selfReferenceDiagnostic(
             typeRef,
@@ -4729,12 +4831,14 @@ const extractDependencyRefs = (
       if (asRecord(astNode.CreateStmt)) {
         return extractCreateTableDependencies(
           asRecord(astNode.CreateStmt) ?? {},
+          context,
         );
       }
       if (asRecord(astNode.CreateTableAsStmt)) {
         return extractCreateTableAsDependencies(
           asRecord(astNode.CreateTableAsStmt) ?? {},
           "table",
+          context,
         );
       }
       return { provides: [], requires: [] };
@@ -4827,18 +4931,24 @@ const extractDependencyRefs = (
         asRecord(astNode.DefineStmt) ?? {},
       );
     case "CREATE_VIEW":
-      return extractViewDependencies(asRecord(astNode.ViewStmt) ?? {}, "view");
+      return extractViewDependencies(
+        asRecord(astNode.ViewStmt) ?? {},
+        "view",
+        context,
+      );
     case "CREATE_MATERIALIZED_VIEW":
       if (asRecord(astNode.ViewStmt)) {
         return extractViewDependencies(
           asRecord(astNode.ViewStmt) ?? {},
           "materialized_view",
+          context,
         );
       }
       if (asRecord(astNode.CreateTableAsStmt)) {
         return extractCreateTableAsDependencies(
           asRecord(astNode.CreateTableAsStmt) ?? {},
           "materialized_view",
+          context,
         );
       }
       return { provides: [], requires: [] };

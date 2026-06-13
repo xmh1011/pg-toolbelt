@@ -1549,6 +1549,15 @@ const builtInBrinSupportFunctionNames = new Set([
   "brin_minmax_multi_opcinfo",
 ]);
 
+const isBuiltInBtreeSkipSupportFunctionName = (
+  name: string,
+  signature: string[],
+): boolean =>
+  name.startsWith("bt") &&
+  name.endsWith("skipsupport") &&
+  signature.length === 1 &&
+  signature[0] === "internal";
+
 const builtInOperatorClassSupportFunctionMatchesSlot = (
   name: string,
   signature: string[],
@@ -1585,6 +1594,10 @@ const builtInOperatorClassSupportFunctionMatchesSlot = (
         signature[0] === "oid" &&
         (name === "btequalimage" || name === "btvarstrequalimage")
       );
+    }
+
+    if (supportNumber === 6) {
+      return isBuiltInBtreeSkipSupportFunctionName(name, signature);
     }
   }
 
@@ -1702,15 +1715,25 @@ const isBuiltInOperatorClassSupportFunctionName = (
   if (!name) {
     return false;
   }
-  const builtInSignatures =
-    builtInOperatorClassSupportFunctionSignatures.get(name);
-  if (!builtInSignatures) {
-    return false;
-  }
   if (
     nameParts.length !== 1 &&
     !(nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog")
   ) {
+    return false;
+  }
+
+  if (
+    accessMethod.toLowerCase() === "btree" &&
+    supportNumber === 6 &&
+    args.length === 1 &&
+    typeRefMatchesBuiltInSupportTypeName(args[0] ?? null, "internal", context)
+  ) {
+    return isBuiltInBtreeSkipSupportFunctionName(name, ["internal"]);
+  }
+
+  const builtInSignatures =
+    builtInOperatorClassSupportFunctionSignatures.get(name);
+  if (!builtInSignatures) {
     return false;
   }
 
@@ -1764,6 +1787,14 @@ const builtInRecordImageOperatorClassSupportOperatorNames = new Set([
   "*>",
 ]);
 
+const builtInBrinInclusionOperatorStrategies = new Map([
+  ["<<", [1]],
+  ["&&", [3]],
+  ["&>", [4]],
+  ["@>", [7, 16, 24, 25]],
+  ["<@", [8, 26, 27]],
+]);
+
 const builtInBtreeOperatorStrategies = new Map([
   ["<", 1],
   ["<=", 2],
@@ -1806,6 +1837,14 @@ const builtInOperatorClassSupportOperatorMatchesSlot = (
   }
 
   if (normalizedAccessMethod === "brin") {
+    if (
+      builtInBrinInclusionOperatorStrategies
+        .get(name)
+        ?.includes(strategyNumber) === true
+    ) {
+      return true;
+    }
+
     if (name === "=" && strategyNumber === 1) {
       return true;
     }
@@ -1820,6 +1859,28 @@ const typeRefMatchesBuiltInPatternOperatorType = (
   typeRef: ObjectRef | null,
 ): boolean =>
   typeRefMatchesBuiltInNames(typeRef, ["bpchar", "text", "varchar"]);
+
+const typeRefMatchesBuiltInBrinInclusionOperatorType = (
+  typeRef: ObjectRef | null,
+  name: string,
+  context: ExtractionContext,
+): boolean => {
+  const isRangeLike =
+    typeRefMatchesPolymorphicBuiltInName(typeRef, "anyrange", context) ||
+    typeRefMatchesPolymorphicBuiltInName(typeRef, "anymultirange", context);
+  const isBox = typeRefMatchesBuiltInNames(typeRef, ["box"]);
+  const isNetwork = typeRefMatchesBuiltInNames(typeRef, ["cidr", "inet"]);
+
+  if (["<<", "&&"].includes(name)) {
+    return isBox || isRangeLike || isNetwork;
+  }
+
+  if (["&>", "@>", "<@"].includes(name)) {
+    return isBox || isRangeLike;
+  }
+
+  return false;
+};
 
 const builtInBtreeSupportOperatorTypeNames = new Set(
   [...builtInRangeOperatorClassSubtypes.values()].flat(),
@@ -1897,7 +1958,8 @@ const isBuiltInOperatorClassSupportOperatorName = (
     !name ||
     (!builtInOperatorClassSupportOperatorNames.has(name) &&
       !builtInPatternOperatorClassSupportOperatorNames.has(name) &&
-      !builtInRecordImageOperatorClassSupportOperatorNames.has(name))
+      !builtInRecordImageOperatorClassSupportOperatorNames.has(name) &&
+      !builtInBrinInclusionOperatorStrategies.has(name))
   ) {
     return false;
   }
@@ -1937,6 +1999,24 @@ const isBuiltInOperatorClassSupportOperatorName = (
       args.length === 2 &&
       objectRefsSameObject(leftArg, rightArg) &&
       typeRefMatchesBuiltInNames(leftArg, ["record"])
+    );
+  }
+
+  if (builtInBrinInclusionOperatorStrategies.has(name)) {
+    if (args.length === 0) {
+      return typeRefMatchesBuiltInBrinInclusionOperatorType(
+        operatorClassDataTypeRef,
+        name,
+        context,
+      );
+    }
+
+    const leftArg = args[0] ?? null;
+    const rightArg = args[1] ?? null;
+    return (
+      args.length === 2 &&
+      objectRefsSameObject(leftArg, rightArg) &&
+      typeRefMatchesBuiltInBrinInclusionOperatorType(leftArg, name, context)
     );
   }
 
@@ -1990,7 +2070,7 @@ const clipPostgresIdentifier = (
   return clipped;
 };
 
-const defaultMultirangeTypeName = (rangeTypeName: string): string =>
+export const defaultMultirangeTypeName = (rangeTypeName: string): string =>
   rangeTypeName.includes("range")
     ? clipPostgresIdentifier(rangeTypeName.replace("range", "multirange"))
     : `${clipPostgresIdentifier(
@@ -2002,8 +2082,13 @@ const defaultMultirangeTypeName = (rangeTypeName: string): string =>
 const isRangeSelfTypeReference = (
   rangeRef: ObjectRef,
   requiredTypeRef: ObjectRef,
+  explicitMultirangeRef?: ObjectRef | null,
 ): boolean =>
   isSelfTypeReference(rangeRef, requiredTypeRef) ||
+  (requiredTypeRef.kind === "type" &&
+    explicitMultirangeRef?.kind === "type" &&
+    requiredTypeRef.schema === explicitMultirangeRef.schema &&
+    requiredTypeRef.name === explicitMultirangeRef.name) ||
   (requiredTypeRef.kind === "type" &&
     requiredTypeRef.schema === rangeRef.schema &&
     requiredTypeRef.name === defaultMultirangeTypeName(rangeRef.name));
@@ -2454,6 +2539,20 @@ const extractCreateRangeDependencies = (
     ? statementNode.params
     : [];
   const subtypeRef = rangeSubtypeRef(params);
+  const explicitMultirangeTypeName = params
+    .map((paramNode) => asRecord(asRecord(paramNode)?.DefElem))
+    .find(
+      (defElem) =>
+        typeof defElem?.defname === "string" &&
+        defElem.defname.toLowerCase() === "multirange_type_name",
+    );
+  const explicitMultirangeRef = objectFromNameParts(
+    "type",
+    extractNameParts(
+      asRecord(asRecord(explicitMultirangeTypeName?.arg)?.TypeName)?.names,
+    ),
+    rangeRef?.schema ?? DEFAULT_SCHEMA,
+  );
   let hasExplicitMultirangeTypeName = false;
 
   for (const paramNode of params) {
@@ -2468,7 +2567,10 @@ const extractCreateRangeDependencies = (
       const typeRef = typeFromTypeNameNode(typeName);
       if (typeRef) {
         requires.push(typeRef);
-        if (rangeRef && isRangeSelfTypeReference(rangeRef, typeRef)) {
+        if (
+          rangeRef &&
+          isRangeSelfTypeReference(rangeRef, typeRef, explicitMultirangeRef)
+        ) {
           diagnostics.push(
             selfReferenceDiagnostic(
               typeRef,

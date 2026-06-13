@@ -5,6 +5,7 @@ import {
 } from "./classify/classify-statement.ts";
 import {
   createExtractionContext,
+  defaultMultirangeTypeName,
   defaultBtreeOperatorClassProviderRefForSubtype,
   domainBaseTypeRef,
   extractDependencies,
@@ -118,15 +119,27 @@ const addImplicitRangeOperatorClassDependencies = (
   const hasExternalSubtypeDefaultBtreeOperatorClass = (
     subtypeRef: ObjectRef,
   ): boolean =>
-    externalProviders?.some(
-      (providerRef) =>
-        providerRef.kind === "type" &&
-        providerRef.schema === subtypeRef.schema &&
+    externalProviders?.some((providerRef) => {
+      if (providerRef.kind !== "type") {
+        return false;
+      }
+      if (subtypeRef.schema && providerRef.schema !== subtypeRef.schema) {
+        return false;
+      }
+      if (
         providerRef.name === subtypeRef.name &&
         externalSubtypeSignatureHasDefaultBtreeOperatorClass(
           providerRef.signature,
-        ),
-    ) === true;
+        )
+      ) {
+        return true;
+      }
+
+      return (
+        providerRef.signature?.trim().toLowerCase() === "(range)" &&
+        defaultMultirangeTypeName(providerRef.name) === subtypeRef.name
+      );
+    }) === true;
 
   for (let index = 0; index < statementNodes.length; index += 1) {
     const statementNode = statementNodes[index];

@@ -150,6 +150,15 @@ export function diffEnums(
         changes.push(new CreateCommentOnEnum({ enum: branchEnum }));
       }
 
+      for (const label of branchEnum.security_labels) {
+        changes.push(
+          new CreateSecurityLabelOnEnum({
+            enum: branchEnum,
+            securityLabel: label,
+          }),
+        );
+      }
+
       const effectiveDefaults = ctx.defaultPrivilegeState.getEffectiveDefaults(
         ctx.currentUser,
         "enum",
@@ -289,12 +298,18 @@ function diffEnumLabels(mainEnum: Enum, branchEnum: Enum): EnumChange[] {
   const branchOrdered = [...branchEnum.labels].sort(
     (a, b) => a.sort_order - b.sort_order,
   );
+  const branchOrderedLabels = branchOrdered.map((label) => label.label);
   const branchIndexByLabel = new Map(
     branchOrdered.map((label, index) => [label.label, index]),
   );
   const workingLabels = [...mainEnum.labels]
     .sort((a, b) => a.sort_order - b.sort_order)
     .map((label) => label.label);
+  if (!preservesExistingLabelOrder(workingLabels, branchOrderedLabels)) {
+    throw new Error(
+      `Cannot reorder existing enum labels for ${mainEnum.schema}.${mainEnum.name}`,
+    );
+  }
   const pendingValues = branchOrdered
     .map((label) => label.label)
     .filter((label) => !mainLabelMap.has(label));
@@ -358,4 +373,28 @@ function diffEnumLabels(mainEnum: Enum, branchEnum: Enum): EnumChange[] {
   // We intentionally avoid emitting drop+create to prevent data loss.
 
   return changes;
+}
+
+function preservesExistingLabelOrder(
+  mainLabels: string[],
+  branchLabels: string[],
+): boolean {
+  let branchIndex = 0;
+
+  for (const label of mainLabels) {
+    while (
+      branchIndex < branchLabels.length &&
+      branchLabels[branchIndex] !== label
+    ) {
+      branchIndex += 1;
+    }
+
+    if (branchIndex >= branchLabels.length) {
+      return false;
+    }
+
+    branchIndex += 1;
+  }
+
+  return true;
 }

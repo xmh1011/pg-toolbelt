@@ -15,6 +15,7 @@ import {
   RevokeEnumPrivileges,
   RevokeGrantOptionEnumPrivileges,
 } from "./changes/enum.privilege.ts";
+import { CreateSecurityLabelOnEnum } from "./changes/enum.security-label.ts";
 import { diffEnums } from "./enum.diff.ts";
 import { Enum, type EnumProps } from "./enum.model.ts";
 
@@ -317,6 +318,26 @@ describe.concurrent("enum.diff", () => {
     }
   });
 
+  test("throws on reordered existing enum labels", () => {
+    expect(() =>
+      diffEnums(
+        testContext,
+        { [testEnum(["a", "b"]).stableId]: testEnum(["a", "b"]) },
+        { [testEnum(["b", "a"]).stableId]: testEnum(["b", "a"]) },
+      ),
+    ).toThrow(/Cannot reorder existing enum labels/);
+  });
+
+  test("throws on added enum labels when existing labels are reordered", () => {
+    expect(() =>
+      diffEnums(
+        testContext,
+        { [testEnum(["a", "b"]).stableId]: testEnum(["a", "b"]) },
+        { [testEnum(["b", "a", "c"]).stableId]: testEnum(["b", "a", "c"]) },
+      ),
+    ).toThrow(/Cannot reorder existing enum labels/);
+  });
+
   test("create with comment emits CreateCommentOnEnum", () => {
     const e = new Enum({
       schema: "public",
@@ -416,6 +437,39 @@ describe.concurrent("enum.diff", () => {
     expect(changes[1]).toBeInstanceOf(CreateEnum);
     expect(changes.some((c) => c instanceof CreateCommentOnEnum)).toBe(true);
     expect(changes.some((c) => c instanceof GrantEnumPrivileges)).toBe(true);
+  });
+
+  test("alter with removed labels preserves security labels", () => {
+    const main = new Enum({
+      schema: "public",
+      name: "e1",
+      owner: "o1",
+      labels: [
+        { label: "a", sort_order: 1 },
+        { label: "b", sort_order: 2 },
+      ],
+      comment: null,
+      privileges: [],
+    });
+    const branch = new Enum({
+      schema: "public",
+      name: "e1",
+      owner: "o1",
+      labels: [{ label: "a", sort_order: 1 }],
+      comment: null,
+      privileges: [],
+      security_labels: [{ provider: "dummy", label: "secret" }],
+    });
+    const changes = diffEnums(
+      testContext,
+      { [main.stableId]: main },
+      { [branch.stableId]: branch },
+    );
+    expect(changes[0]).toBeInstanceOf(DropEnum);
+    expect(changes[1]).toBeInstanceOf(CreateEnum);
+    expect(changes.some((c) => c instanceof CreateSecurityLabelOnEnum)).toBe(
+      true,
+    );
   });
 
   test("alter comment emits create and drop comment", () => {

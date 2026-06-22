@@ -192,6 +192,22 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test(
+      "reject reordered enum values",
+      withDb(pgVersion, async (db) => {
+        await db.main.query(
+          "CREATE TYPE public.reordered_status AS ENUM ('queued', 'ready');",
+        );
+        await db.branch.query(
+          "CREATE TYPE public.reordered_status AS ENUM ('ready', 'queued');",
+        );
+
+        await expect(createPlan(db.main, db.branch)).rejects.toThrow(
+          /Cannot reorder existing enum labels/,
+        );
+      }),
+    );
+
+    test(
       "create domain type with constraint",
       withDb(pgVersion, async (db) => {
         await roundtripFidelityTest({

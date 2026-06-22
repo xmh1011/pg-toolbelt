@@ -93,6 +93,34 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test(
+      "add multiple enum values before the first existing label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup:
+            "CREATE TYPE public.issue_304_status AS ENUM ('ready');",
+          testSql: dedent`
+            DROP TYPE public.issue_304_status;
+            CREATE TYPE public.issue_304_status AS ENUM (
+              'queued',
+              'blocked',
+              'ready'
+            );
+          `,
+          assertSqlStatements: (sqlStatements) => {
+            expect(sqlStatements).toMatchInlineSnapshot(`
+              [
+                "ALTER TYPE public.issue_304_status ADD VALUE 'blocked' BEFORE 'ready'",
+                "ALTER TYPE public.issue_304_status ADD VALUE 'queued' BEFORE 'blocked'",
+              ]
+            `);
+          },
+        });
+      }),
+    );
+
+    test(
       "create domain type with constraint",
       withDb(pgVersion, async (db) => {
         await roundtripFidelityTest({

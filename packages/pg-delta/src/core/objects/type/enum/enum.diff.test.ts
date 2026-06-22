@@ -25,6 +25,30 @@ const testContext = {
   mainRoles: {},
 };
 
+function testEnum(labels: string[]): Enum {
+  return new Enum({
+    schema: "public",
+    name: "e1",
+    owner: "o1",
+    labels: labels.map((label, index) => ({
+      label,
+      sort_order: index + 1,
+    })),
+    comment: null,
+    privileges: [],
+  });
+}
+
+function serializedAddValueChanges(main: Enum, branch: Enum): string[] {
+  return diffEnums(
+    testContext,
+    { [main.stableId]: main },
+    { [branch.stableId]: branch },
+  )
+    .filter((change) => change instanceof AlterEnumAddValue)
+    .map((change) => change.serialize());
+}
+
 describe.concurrent("enum.diff", () => {
   test("create and drop", () => {
     const props: EnumProps = {
@@ -196,6 +220,91 @@ describe.concurrent("enum.diff", () => {
     expect(add).toBeDefined();
     expect(add?.position?.after).toBe("b");
     expect(add?.position?.before).toBeUndefined();
+  });
+
+  test("orders added enum labels using only existing anchors", () => {
+    const cases = [
+      {
+        main: ["b"],
+        branch: ["a", "b"],
+        expected: ["ALTER TYPE public.e1 ADD VALUE 'a' BEFORE 'b'"],
+      },
+      {
+        main: [],
+        branch: ["a"],
+        expected: ["ALTER TYPE public.e1 ADD VALUE 'a'"],
+      },
+      {
+        main: [],
+        branch: [""],
+        expected: ["ALTER TYPE public.e1 ADD VALUE ''"],
+      },
+      {
+        main: [],
+        branch: ["a", "b"],
+        expected: [
+          "ALTER TYPE public.e1 ADD VALUE 'a'",
+          "ALTER TYPE public.e1 ADD VALUE 'b' AFTER 'a'",
+        ],
+      },
+      {
+        main: ["a"],
+        branch: ["a", "b", "c"],
+        expected: [
+          "ALTER TYPE public.e1 ADD VALUE 'b' AFTER 'a'",
+          "ALTER TYPE public.e1 ADD VALUE 'c' AFTER 'b'",
+        ],
+      },
+      {
+        main: [""],
+        branch: ["", "a"],
+        expected: ["ALTER TYPE public.e1 ADD VALUE 'a' AFTER ''"],
+      },
+      {
+        main: ["a"],
+        branch: ["", "a"],
+        expected: ["ALTER TYPE public.e1 ADD VALUE '' BEFORE 'a'"],
+      },
+      {
+        main: ["c"],
+        branch: ["a", "b", "c"],
+        expected: [
+          "ALTER TYPE public.e1 ADD VALUE 'b' BEFORE 'c'",
+          "ALTER TYPE public.e1 ADD VALUE 'a' BEFORE 'b'",
+        ],
+      },
+      {
+        main: ["d"],
+        branch: ["a", "b", "c", "d"],
+        expected: [
+          "ALTER TYPE public.e1 ADD VALUE 'c' BEFORE 'd'",
+          "ALTER TYPE public.e1 ADD VALUE 'b' BEFORE 'c'",
+          "ALTER TYPE public.e1 ADD VALUE 'a' BEFORE 'b'",
+        ],
+      },
+      {
+        main: ["a", "d"],
+        branch: ["a", "b", "c", "d"],
+        expected: [
+          "ALTER TYPE public.e1 ADD VALUE 'b' AFTER 'a'",
+          "ALTER TYPE public.e1 ADD VALUE 'c' AFTER 'b'",
+        ],
+      },
+      {
+        main: ["b"],
+        branch: ["a", "b", "c"],
+        expected: [
+          "ALTER TYPE public.e1 ADD VALUE 'a' BEFORE 'b'",
+          "ALTER TYPE public.e1 ADD VALUE 'c' AFTER 'b'",
+        ],
+      },
+    ];
+
+    for (const { main, branch, expected } of cases) {
+      expect(
+        serializedAddValueChanges(testEnum(main), testEnum(branch)),
+      ).toEqual(expected);
+    }
   });
 
   test("create with comment emits CreateCommentOnEnum", () => {

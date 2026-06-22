@@ -121,6 +121,59 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test(
+      "add enum values to an empty enum",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: "CREATE TYPE public.empty_enum_status AS ENUM ();",
+          testSql: dedent`
+            DROP TYPE public.empty_enum_status;
+            CREATE TYPE public.empty_enum_status AS ENUM (
+              '',
+              'ready'
+            );
+          `,
+          assertSqlStatements: (sqlStatements) => {
+            expect(sqlStatements).toMatchInlineSnapshot(`
+              [
+                "ALTER TYPE public.empty_enum_status ADD VALUE ''",
+                "ALTER TYPE public.empty_enum_status ADD VALUE 'ready' AFTER ''",
+              ]
+            `);
+          },
+        });
+      }),
+    );
+
+    test(
+      "add enum values around an empty-string label",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: "CREATE TYPE public.empty_anchor_status AS ENUM ('');",
+          testSql: dedent`
+            DROP TYPE public.empty_anchor_status;
+            CREATE TYPE public.empty_anchor_status AS ENUM (
+              'queued',
+              '',
+              'ready'
+            );
+          `,
+          assertSqlStatements: (sqlStatements) => {
+            expect(sqlStatements).toMatchInlineSnapshot(`
+              [
+                "ALTER TYPE public.empty_anchor_status ADD VALUE 'queued' BEFORE ''",
+                "ALTER TYPE public.empty_anchor_status ADD VALUE 'ready' AFTER ''",
+              ]
+            `);
+          },
+        });
+      }),
+    );
+
+    test(
       "create domain type with constraint",
       withDb(pgVersion, async (db) => {
         await roundtripFidelityTest({

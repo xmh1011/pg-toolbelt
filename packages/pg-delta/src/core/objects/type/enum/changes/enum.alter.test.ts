@@ -129,6 +129,29 @@ describe.concurrent("enum", () => {
       );
     });
 
+    test("add value before empty label", async () => {
+      const props: EnumProps = {
+        schema: "public",
+        name: "test_enum",
+        owner: "test",
+        labels: [{ sort_order: 1, label: "" }],
+        comment: null,
+        privileges: [],
+      };
+      const main = new Enum(props);
+      const change = new AlterEnumAddValue({
+        enum: main,
+        newValue: "value1",
+        position: { before: "" },
+      });
+
+      await assertValidSql(change.serialize());
+
+      expect(change.serialize()).toBe(
+        "ALTER TYPE public.test_enum ADD VALUE 'value1' BEFORE ''",
+      );
+    });
+
     test("complex enum changes are not auto-replaced", async () => {
       expect(1).toBe(1);
     });

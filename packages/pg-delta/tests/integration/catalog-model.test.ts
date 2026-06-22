@@ -190,6 +190,42 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test(
+      "extract enum types with empty labels",
+      withDb(pgVersion, async (db) => {
+        await db.main.query(`
+        CREATE SCHEMA test_schema;
+        CREATE TYPE test_schema.status AS ENUM ('active', 'inactive', 'pending');
+        CREATE TYPE test_schema.empty_status AS ENUM ();
+        CREATE TYPE test_schema.blank_status AS ENUM ('');
+      `);
+
+        const catalog = await extractCatalog(db.main);
+
+        const enumType = Object.values(catalog.enums).find(
+          (type) => type.schema === "test_schema" && type.name === "status",
+        );
+        expect(enumType).toBeDefined();
+        expect(enumType?.labels.map((l) => l.label)).toEqual([
+          "active",
+          "inactive",
+          "pending",
+        ]);
+        const emptyEnumType = Object.values(catalog.enums).find(
+          (type) =>
+            type.schema === "test_schema" && type.name === "empty_status",
+        );
+        expect(emptyEnumType).toBeDefined();
+        expect(emptyEnumType?.labels.map((l) => l.label)).toEqual([]);
+        const blankEnumType = Object.values(catalog.enums).find(
+          (type) =>
+            type.schema === "test_schema" && type.name === "blank_status",
+        );
+        expect(blankEnumType).toBeDefined();
+        expect(blankEnumType?.labels.map((l) => l.label)).toEqual([""]);
+      }),
+    );
+
+    test(
       "extract database objects",
       withDb(pgVersion, async (db) => {
         // Create sequences, indexes, triggers, and procedures

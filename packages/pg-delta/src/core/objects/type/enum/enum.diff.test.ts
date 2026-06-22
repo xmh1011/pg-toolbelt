@@ -261,9 +261,19 @@ describe.concurrent("enum.diff", () => {
         expected: ["ALTER TYPE public.e1 ADD VALUE 'a' AFTER ''"],
       },
       {
+        main: [""],
+        branch: ["a", ""],
+        expected: ["ALTER TYPE public.e1 ADD VALUE 'a' BEFORE ''"],
+      },
+      {
         main: ["a"],
         branch: ["", "a"],
         expected: ["ALTER TYPE public.e1 ADD VALUE '' BEFORE 'a'"],
+      },
+      {
+        main: ["a"],
+        branch: ["a", ""],
+        expected: ["ALTER TYPE public.e1 ADD VALUE '' AFTER 'a'"],
       },
       {
         main: ["c"],

@@ -84,9 +84,9 @@ export class AlterEnumAddValue extends AlterEnumChange {
       quoteLiteral(this.newValue),
     ];
 
-    if (this.position?.before) {
+    if (this.position?.before !== undefined) {
       parts.push("BEFORE", quoteLiteral(this.position.before));
-    } else if (this.position?.after) {
+    } else if (this.position?.after !== undefined) {
       parts.push("AFTER", quoteLiteral(this.position.after));
     }
 

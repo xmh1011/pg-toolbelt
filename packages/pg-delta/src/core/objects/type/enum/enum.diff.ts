@@ -284,54 +284,74 @@ function diffEnumLabels(mainEnum: Enum, branchEnum: Enum): EnumChange[] {
   const mainLabelMap = new Map(
     mainEnum.labels.map((label) => [label.label, label.sort_order]),
   );
-  const branchLabelMap = new Map(
-    branchEnum.labels.map((label) => [label.label, label.sort_order]),
-  );
-
-  // Find added values (values in branch but not in main)
-  const addedValues = Array.from(branchLabelMap.keys()).filter(
-    (label) => !mainLabelMap.has(label),
-  );
-
   // Maintain a working list of labels (by name) to calculate correct BEFORE/AFTER
   // anchors as we simulate applying the additions in order.
   const branchOrdered = [...branchEnum.labels].sort(
     (a, b) => a.sort_order - b.sort_order,
   );
-  const workingLabels = [...mainEnum.labels].map((l) => l.label);
+  const branchIndexByLabel = new Map(
+    branchOrdered.map((label, index) => [label.label, index]),
+  );
+  const workingLabels = [...mainEnum.labels]
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((label) => label.label);
+  const pendingValues = branchOrdered
+    .map((label) => label.label)
+    .filter((label) => !mainLabelMap.has(label));
 
-  for (const newValue of addedValues) {
-    const branchIdx = branchOrdered.findIndex((l) => l.label === newValue);
-    if (branchIdx === -1) continue;
+  while (pendingValues.length > 0) {
+    if (workingLabels.length === 0) {
+      const newValue = pendingValues.shift();
+      if (newValue === undefined) break;
 
-    const prevBranch = branchOrdered[branchIdx - 1]?.label;
-    const nextBranch = branchOrdered[branchIdx + 1]?.label;
-
-    let position: { before?: string; after?: string } | undefined;
-
-    // Prefer AFTER when prevBranch exists in workingLabels (more natural for sequential additions)
-    // Use BEFORE only when we need to insert before the first value or when prevBranch doesn't exist
-    if (prevBranch && workingLabels.includes(prevBranch)) {
-      position = { after: prevBranch };
-      // Insert after the previous label in our working list
-      const prevIdx = workingLabels.indexOf(prevBranch);
-      workingLabels.splice(prevIdx + 1, 0, newValue);
-    } else if (nextBranch && workingLabels.includes(nextBranch)) {
-      // Insert before nextBranch when prevBranch doesn't exist (e.g., adding at beginning)
-      position = { before: nextBranch };
-      const nextIdx = workingLabels.indexOf(nextBranch);
-      workingLabels.splice(nextIdx, 0, newValue);
-    } else if (nextBranch) {
-      // nextBranch exists but not in workingLabels yet (shouldn't happen in normal flow)
-      position = { before: nextBranch };
       workingLabels.push(newValue);
-    } else {
-      // Fallback: append to the end
-      position = { after: workingLabels[workingLabels.length - 1] };
-      workingLabels.push(newValue);
+      changes.push(new AlterEnumAddValue({ enum: mainEnum, newValue }));
+      continue;
     }
 
-    changes.push(new AlterEnumAddValue({ enum: mainEnum, newValue, position }));
+    let emittedInPass = false;
+
+    for (let i = 0; i < pendingValues.length; i += 1) {
+      const newValue = pendingValues[i];
+      const branchIdx = branchIndexByLabel.get(newValue);
+      if (branchIdx === undefined) continue;
+
+      const prevBranch = branchOrdered[branchIdx - 1]?.label;
+      const nextBranch = branchOrdered[branchIdx + 1]?.label;
+
+      let position: { before?: string; after?: string } | undefined;
+      let insertIdx: number | undefined;
+
+      // Prefer AFTER when prevBranch is already materialized. Otherwise, use
+      // BEFORE only when nextBranch is already materialized. This guarantees
+      // each emitted anchor exists at the point PostgreSQL executes the ALTER.
+      if (prevBranch !== undefined && workingLabels.includes(prevBranch)) {
+        position = { after: prevBranch };
+        insertIdx = workingLabels.indexOf(prevBranch) + 1;
+      } else if (
+        nextBranch !== undefined &&
+        workingLabels.includes(nextBranch)
+      ) {
+        position = { before: nextBranch };
+        insertIdx = workingLabels.indexOf(nextBranch);
+      } else {
+        continue;
+      }
+
+      workingLabels.splice(insertIdx, 0, newValue);
+      pendingValues.splice(i, 1);
+      changes.push(
+        new AlterEnumAddValue({ enum: mainEnum, newValue, position }),
+      );
+      emittedInPass = true;
+      i -= 1;
+    }
+
+    if (!emittedInPass) {
+      throw new Error(
+        `Could not find an existing enum label anchor for added values: ${pendingValues.join(", ")}`,
+      );
+    }
   }
 
   // Complex changes (removals, resorting) are currently not auto-handled.

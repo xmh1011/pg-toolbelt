@@ -28,6 +28,24 @@ for (const pgVersion of POSTGRES_VERSIONS) {
       }),
     );
     test(
+      "create empty enum type",
+      withDb(pgVersion, async (db) => {
+        await db.branch.query("CREATE TYPE public.empty_status AS ENUM ();");
+
+        const planResult = await createPlan(db.main, db.branch);
+        expect(planResult).toBeDefined();
+        if (!planResult) {
+          throw new Error("Expected planResult to be defined");
+        }
+
+        expect(flattenPlanStatements(planResult.plan)).toMatchInlineSnapshot(`
+          [
+            "CREATE TYPE public.empty_status AS ENUM ()",
+          ]
+        `);
+      }),
+    );
+    test(
       "add enum value before setting default to the new value",
       withDb(pgVersion, async (db) => {
         const initialSetup = `

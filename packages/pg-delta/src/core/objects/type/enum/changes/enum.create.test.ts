@@ -28,4 +28,23 @@ describe("enum", () => {
       "CREATE TYPE public.test_enum AS ENUM ('value1', 'value2', 'value3')",
     );
   });
+
+  test("create empty enum", async () => {
+    const enumType = new Enum({
+      schema: "public",
+      name: "test_enum",
+      owner: "test",
+      labels: [],
+      comment: null,
+      privileges: [],
+    });
+
+    const change = new CreateEnum({
+      enum: enumType,
+    });
+
+    await assertValidSql(change.serialize());
+
+    expect(change.serialize()).toBe("CREATE TYPE public.test_enum AS ENUM ()");
+  });
 });

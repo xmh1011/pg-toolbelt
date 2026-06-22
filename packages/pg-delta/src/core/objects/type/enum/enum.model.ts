@@ -121,8 +121,8 @@ export async function extractEnums(pool: Pool): Promise<Enum[]> {
   const { rows: enumRows } = await pool.query<{
     schema: string;
     name: string;
-    sort_order: number;
-    label: string;
+    sort_order: number | null;
+    label: string | null;
     owner: string;
     comment: string | null;
     privileges: { grantee: string; privilege: string; grantable: boolean }[];
@@ -171,10 +171,11 @@ select
     '[]'::json
   ) as security_labels
 from
-  pg_catalog.pg_enum e
-  inner join pg_catalog.pg_type t on t.oid = e.enumtypid
+  pg_catalog.pg_type t
+  left join pg_catalog.pg_enum e on e.enumtypid = t.oid
   left outer join extension_oids ext on t.oid = ext.objid
-  where not t.typnamespace::regnamespace::text like any(array['pg\\_%', 'information\\_schema'])
+  where t.typtype = 'e'
+  and not t.typnamespace::regnamespace::text like any(array['pg\\_%', 'information\\_schema'])
   and ext.objid is null
 order by
   1, 2, 3
@@ -208,7 +209,9 @@ order by
         security_labels: e.security_labels,
       };
     }
-    grouped[key].labels.push({ sort_order: e.sort_order, label: e.label });
+    if (e.sort_order !== null && e.label !== null) {
+      grouped[key].labels.push({ sort_order: e.sort_order, label: e.label });
+    }
   }
   // Validate and parse each enum using the Zod schema
   const validatedEnums = Object.values(grouped).map((e) =>

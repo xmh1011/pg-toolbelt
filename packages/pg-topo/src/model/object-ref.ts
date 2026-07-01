@@ -350,7 +350,14 @@ export const objectRefKey = (ref: ObjectRef): string => {
 export const dedupeObjectRefs = (refs: ObjectRef[]): ObjectRef[] => {
   const map = new Map<string, ObjectRef>();
   for (const ref of refs) {
-    map.set(objectRefKey(ref), ref);
+    const key = objectRefKey(ref);
+    const existing = map.get(key);
+    if (
+      !existing ||
+      (ref.explicitSchema === true && !existing.explicitSchema)
+    ) {
+      map.set(key, ref);
+    }
   }
   return [...map.values()];
 };

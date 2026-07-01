@@ -1,4 +1,5 @@
 import type { StatementClass } from "../classify/classify-statement.ts";
+import { signaturesCompatible } from "../model/object-compat.ts";
 import {
   createObjectRef,
   createObjectRefFromAst,
@@ -49,6 +50,7 @@ type ExtractionContext = {
   rangeTypeKeys: ReadonlySet<string>;
   multirangeTypeKeys: ReadonlySet<string>;
   domainBaseTypes: ReadonlyMap<string, ObjectRef>;
+  routineReturnProviders: readonly ObjectRef[];
 };
 
 const EMPTY_EXTRACTION_CONTEXT: ExtractionContext = {
@@ -57,6 +59,7 @@ const EMPTY_EXTRACTION_CONTEXT: ExtractionContext = {
   rangeTypeKeys: new Set(),
   multirangeTypeKeys: new Set(),
   domainBaseTypes: new Map(),
+  routineReturnProviders: [],
 };
 
 const generatedArrayTypeName = (typeName: string): string =>
@@ -159,13 +162,24 @@ const isSelfTypeReference = (
   createdTypeRef: ObjectRef,
   requiredTypeRef: ObjectRef,
   context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
-): boolean =>
-  requiredTypeRef.kind === "type" &&
-  requiredTypeRef.schema === createdTypeRef.schema &&
-  (requiredTypeRef.name === createdTypeRef.name ||
-    requiredTypeRef.name === `${createdTypeRef.name}[]` ||
-    (requiredTypeRef.name === generatedArrayTypeName(createdTypeRef.name) &&
-      !hasCreatedType(context, requiredTypeRef)));
+): boolean => {
+  if (requiredTypeRef.kind !== "type") {
+    return false;
+  }
+  if (
+    requiredTypeRef.explicitSchema !== true &&
+    isBuiltInObjectRef(requiredTypeRef)
+  ) {
+    return false;
+  }
+  return (
+    requiredTypeRef.schema === createdTypeRef.schema &&
+    (requiredTypeRef.name === createdTypeRef.name ||
+      requiredTypeRef.name === `${createdTypeRef.name}[]` ||
+      (requiredTypeRef.name === generatedArrayTypeName(createdTypeRef.name) &&
+        !hasCreatedType(context, requiredTypeRef)))
+  );
+};
 
 const extractCreateTableDependencies = (
   statementNode: Record<string, unknown>,
@@ -464,6 +478,7 @@ const extractCreateFunctionDependencies = (
 
   const functionRef = objectFromNameParts(kind, functionNameParts);
   const explicitReturnType = typeFromTypeNameNode(statementNode.returnType);
+  const returnsSet = asRecord(statementNode.returnType)?.setof === true;
   const returnType =
     explicitReturnType ??
     (outputArgTypes.length === 1
@@ -481,7 +496,7 @@ const extractCreateFunctionDependencies = (
         argSignature,
       ),
     );
-    if (returnType) {
+    if (returnType && !returnsSet) {
       provides.push(
         createObjectRefFromAst(
           kind,
@@ -2782,6 +2797,42 @@ const typeRefsSignature = (
     .map((argRef) => (argRef ? typeSignaturePart(argRef) : "unknown"))
     .join(",")})${returnType ? `->${typeSignaturePart(returnType)}` : ""}`;
 
+const returnTypeSignaturePart = (signature?: string): string | null => {
+  const separatorIndex = signature?.indexOf("->") ?? -1;
+  if (!signature || separatorIndex < 0) {
+    return null;
+  }
+  const returnType = signature.slice(separatorIndex + "->".length).trim();
+  return returnType.length > 0 ? returnType : null;
+};
+
+const routineReturnTypeSignaturePart = (
+  context: ExtractionContext,
+  functionRef: ObjectRef,
+  argsSignature: string | undefined,
+): string | null => {
+  if (!argsSignature) {
+    return null;
+  }
+  for (const providerRef of context.routineReturnProviders) {
+    if (
+      providerRef.kind !== "function" ||
+      providerRef.name !== functionRef.name ||
+      providerRef.schema !== functionRef.schema
+    ) {
+      continue;
+    }
+    if (
+      signaturesCompatible(argsSignature, providerRef.signature, {
+        requireExactArity: true,
+      })
+    ) {
+      return returnTypeSignaturePart(providerRef.signature);
+    }
+  }
+  return null;
+};
+
 const objectWithArgsRef = (
   kind: ObjectRef["kind"],
   objectWithArgs: unknown,
@@ -2998,9 +3049,23 @@ export const createExtractionContext = (
   const rangeTypeKeys = new Set<string>();
   const multirangeTypeKeys = new Set<string>();
   const domainBaseTypes = new Map<string, ObjectRef>();
+  const routineReturnProviders: ObjectRef[] = [];
 
   for (const astNode of astNodes) {
     const astRecord = asRecord(astNode);
+    const functionStmt = asRecord(astRecord?.CreateFunctionStmt);
+    if (functionStmt) {
+      const extraction = extractCreateFunctionDependencies(
+        functionStmt,
+        "function",
+      );
+      routineReturnProviders.push(
+        ...extraction.provides.filter((providedRef) =>
+          Boolean(returnTypeSignaturePart(providedRef.signature)),
+        ),
+      );
+    }
+
     const domainStmt = asRecord(astRecord?.CreateDomainStmt);
     const domainRef = objectFromNameParts(
       "type",
@@ -3147,6 +3212,7 @@ export const createExtractionContext = (
     rangeTypeKeys,
     multirangeTypeKeys,
     domainBaseTypes,
+    routineReturnProviders,
   };
 };
 
@@ -3972,6 +4038,7 @@ const addInvalidPgCatalogTypeDiagnostic = (
 
 const extractCreateOperatorDependencies = (
   statementNode: Record<string, unknown>,
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
 ): ExtractDependenciesResult => {
   const provides: ObjectRef[] = [];
   const requires: ObjectRef[] = [];
@@ -4103,6 +4170,10 @@ const extractCreateOperatorDependencies = (
   );
   const functionArgRefs = operatorArgRefs.map(catalogQualifiedBuiltInTypeRef);
   const functionSignatureParts = functionArgRefs.map(typeSignaturePart);
+  const functionArgsSignature =
+    functionSignatureParts.length > 0
+      ? `(${functionSignatureParts.join(",")})`
+      : undefined;
   const operatorSignatureParts =
     leftArgRef || rightArgRef
       ? [
@@ -4112,16 +4183,36 @@ const extractCreateOperatorDependencies = (
       : [];
 
   if (operatorRef) {
+    const operatorArgsSignature =
+      operatorSignatureParts.length > 0
+        ? `(${operatorSignatureParts.join(",")})`
+        : undefined;
     provides.push(
       createObjectRefFromAst(
         "operator",
         operatorRef.name,
         operatorRef.schema,
-        operatorSignatureParts.length > 0
-          ? `(${operatorSignatureParts.join(",")})`
-          : undefined,
+        operatorArgsSignature,
       ),
     );
+    const functionRef = objectFromNameParts("function", functionNameParts);
+    const returnTypeSignature = functionRef
+      ? routineReturnTypeSignaturePart(
+          context,
+          functionRef,
+          functionArgsSignature,
+        )
+      : null;
+    if (operatorArgsSignature && returnTypeSignature) {
+      provides.push(
+        createObjectRefFromAst(
+          "operator",
+          operatorRef.name,
+          operatorRef.schema,
+          `${operatorArgsSignature}->${returnTypeSignature}`,
+        ),
+      );
+    }
   }
 
   const functionRef = objectFromNameParts("function", functionNameParts);
@@ -4386,6 +4477,7 @@ const extractCreateOperatorClassDependencies = (
         "operator_family",
         extractNameParts(item.order_family),
       );
+      const isOrderingOperator = Boolean(orderFamilyRef);
       const orderFamilyNameParts = extractNameParts(item.order_family);
       if (orderFamilyRef) {
         const orderFamilyRequirement = createObjectRefFromAst(
@@ -4412,6 +4504,20 @@ const extractCreateOperatorClassDependencies = (
         }
       }
 
+      const boolReturnOperatorRefFor = (
+        operatorRef: ObjectRef,
+      ): ObjectRef | null =>
+        !isOrderingOperator && operatorRef.signature
+          ? markExactSignatureRef(
+              createObjectRefFromAst(
+                "operator",
+                operatorRef.name,
+                operatorRef.schema,
+                `${operatorRef.signature}->bool`,
+              ),
+            )
+          : null;
+
       if (
         isBuiltInOperatorClassSupportOperatorName(
           nameParts,
@@ -4431,6 +4537,12 @@ const extractCreateOperatorClassDependencies = (
           );
           if (operatorRef) {
             requires.push(markOmitIfNoLocalProducerRef(operatorRef));
+            const boolReturnOperatorRef = boolReturnOperatorRefFor(operatorRef);
+            if (boolReturnOperatorRef) {
+              requires.push(
+                markOmitIfNoLocalProducerRef(boolReturnOperatorRef),
+              );
+            }
           }
         }
         continue;
@@ -4446,6 +4558,10 @@ const extractCreateOperatorClassDependencies = (
       );
       if (operatorRef) {
         requires.push(operatorRef);
+        const boolReturnOperatorRef = boolReturnOperatorRefFor(operatorRef);
+        if (boolReturnOperatorRef) {
+          requires.push(markOmitIfNoLocalProducerRef(boolReturnOperatorRef));
+        }
         if (isPgCatalogQualifiedName(nameParts)) {
           diagnostics.push({
             code: "UNRESOLVED_DEPENDENCY",
@@ -5323,6 +5439,7 @@ const extractDependencyRefs = (
     case "CREATE_OPERATOR":
       return extractCreateOperatorDependencies(
         asRecord(astNode.DefineStmt) ?? {},
+        context,
       );
     case "CREATE_OPERATOR_CLASS":
       return extractCreateOperatorClassDependencies(

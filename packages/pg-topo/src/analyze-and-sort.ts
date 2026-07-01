@@ -196,7 +196,7 @@ const addImplicitRangeOperatorClassDependencies = (
       }
     }
     for (const providerNode of statementNodes) {
-      for (const providedRef of providerNode.provides) {
+      for (const providedRef of providerNode.annotations.provides) {
         const providerRef = defaultBtreeOperatorClassProvidedRefForSubtype(
           providedRef,
           effectiveSubtypeRef,
@@ -239,6 +239,31 @@ const addImplicitRangeOperatorClassDependencies = (
     }
   }
 };
+
+const argsOnlySignature = (signature?: string): string | null => {
+  const trimmed = signature?.trim();
+  if (!trimmed?.startsWith("(")) {
+    return null;
+  }
+  let depth = 0;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return trimmed.slice(0, index + 1);
+      }
+    }
+  }
+  return null;
+};
+
+const hasReturnSignature = (signature?: string): boolean =>
+  signature?.includes("->") === true;
 
 const omitRequirementsWithoutLocalProducers = (
   statementNodes: StatementNode[],
@@ -312,6 +337,8 @@ const omitRequirementsWithoutLocalProducers = (
       return true;
     }
 
+    const requiredArgsOnlySignature = argsOnlySignature(requiredRef.signature);
+
     for (const statementNode of statementNodes) {
       for (const providedRef of statementNode.provides) {
         if (
@@ -328,6 +355,27 @@ const omitRequirementsWithoutLocalProducers = (
         }
         if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
           continue;
+        }
+        if (requiredArgsOnlySignature) {
+          const providedArgsOnlySignature = argsOnlySignature(
+            providedRef.signature,
+          );
+          if (
+            (!hasReturnSignature(requiredRef.signature) ||
+              hasReturnSignature(providedRef.signature)) &&
+            providedArgsOnlySignature &&
+            signaturesCompatible(
+              requiredArgsOnlySignature,
+              providedArgsOnlySignature,
+              {
+                rejectPolymorphicProviderArgs:
+                  requiresExactSignature(requiredRef),
+                requireExactArity: requiresExactSignature(requiredRef),
+              },
+            )
+          ) {
+            return true;
+          }
         }
         const requireExactSignature = requiresExactSignature(requiredRef);
         const signaturesMatch =

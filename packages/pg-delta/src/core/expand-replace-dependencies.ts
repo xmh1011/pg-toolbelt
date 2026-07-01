@@ -11,6 +11,7 @@ import { AlterIndexSetStatistics } from "./objects/index/changes/index.alter.ts"
 import { CreateCommentOnIndex } from "./objects/index/changes/index.comment.ts";
 import { CreateIndex } from "./objects/index/changes/index.create.ts";
 import { DropIndex } from "./objects/index/changes/index.drop.ts";
+import { AlterMaterializedViewSetCluster } from "./objects/materialized-view/changes/materialized-view.alter.ts";
 import { CreateMaterializedView } from "./objects/materialized-view/changes/materialized-view.create.ts";
 import { DropMaterializedView } from "./objects/materialized-view/changes/materialized-view.drop.ts";
 import { buildCreateMaterializedViewChanges } from "./objects/materialized-view/materialized-view.diff.ts";
@@ -1584,6 +1585,13 @@ function buildMaterializedViewIndexReplacementChanges(
         ...changes,
       ]),
     );
+
+    changes.push(
+      ...buildIndexClusterReplacementChanges(index, branchCatalog, [
+        ...existingChanges,
+        ...changes,
+      ]),
+    );
   }
 
   return changes;
@@ -2189,6 +2197,21 @@ function buildIndexClusterReplacementChanges(
   existingChanges: readonly Change[],
 ): Change[] {
   if (!branchCatalog || !index.is_clustered) return [];
+
+  if (index.table_relkind === "m") {
+    const branchMaterializedView =
+      branchCatalog.materializedViews[index.tableStableId];
+    if (!branchMaterializedView) return [];
+
+    const change = new AlterMaterializedViewSetCluster({
+      materializedView: branchMaterializedView,
+      indexName: index.name,
+    });
+    return hasEquivalentReplacementMetadataChange(change, existingChanges)
+      ? []
+      : [change];
+  }
+
   const branchTable = branchCatalog.tables[index.tableStableId];
   if (!branchTable) return [];
 

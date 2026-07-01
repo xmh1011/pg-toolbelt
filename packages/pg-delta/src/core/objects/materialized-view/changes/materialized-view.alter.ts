@@ -1,4 +1,5 @@
 import type { SerializeOptions } from "../../../integrations/serialize/serialize.types.ts";
+import { stableId } from "../../utils.ts";
 import type { MaterializedView } from "../materialized-view.model.ts";
 import { AlterMaterializedViewChange } from "./materialized-view.base.ts";
 
@@ -28,12 +29,13 @@ import { AlterMaterializedViewChange } from "./materialized-view.base.ts";
  * Notes for diff-based generation:
  * - We currently only emit OWNER TO when owner differs.
  * - Name/schema changes are treated as identity changes; handled as drop/create by the diff engine.
- * - Column attribute changes, CLUSTER are not modeled and thus not emitted.
+ * - Column attribute changes are not modeled and thus not emitted.
  * - Changes to definition, options, and other non-alterable properties trigger a replace (drop + create).
  */
 
 export type AlterMaterializedView =
   | AlterMaterializedViewChangeOwner
+  | AlterMaterializedViewSetCluster
   | AlterMaterializedViewSetStorageParams;
 
 /**
@@ -60,6 +62,44 @@ export class AlterMaterializedViewChangeOwner extends AlterMaterializedViewChang
       `${this.materializedView.schema}.${this.materializedView.name}`,
       "OWNER TO",
       this.owner,
+    ].join(" ");
+  }
+}
+
+/**
+ * ALTER MATERIALIZED VIEW ... CLUSTER ON ...
+ */
+export class AlterMaterializedViewSetCluster extends AlterMaterializedViewChange {
+  public readonly materializedView: MaterializedView;
+  public readonly indexName: string;
+  public readonly scope = "object" as const;
+
+  constructor(props: {
+    materializedView: MaterializedView;
+    indexName: string;
+  }) {
+    super();
+    this.materializedView = props.materializedView;
+    this.indexName = props.indexName;
+  }
+
+  get requires() {
+    return [
+      this.materializedView.stableId,
+      stableId.index(
+        this.materializedView.schema,
+        this.materializedView.name,
+        this.indexName,
+      ),
+    ];
+  }
+
+  serialize(_options?: SerializeOptions): string {
+    return [
+      "ALTER MATERIALIZED VIEW",
+      `${this.materializedView.schema}.${this.materializedView.name}`,
+      "CLUSTER ON",
+      this.indexName,
     ].join(" ");
   }
 }

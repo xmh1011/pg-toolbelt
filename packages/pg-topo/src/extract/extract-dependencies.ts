@@ -432,22 +432,45 @@ const extractCreateFunctionDependencies = (
     ? statementNode.parameters
     : [];
   const signatureParts: string[] = [];
+  const outputArgTypes: ObjectRef[] = [];
 
   for (const parameterNode of parameters) {
     const functionParameter = asRecord(
       asRecord(parameterNode)?.FunctionParameter,
     );
+    const parameterMode =
+      typeof functionParameter?.mode === "string"
+        ? functionParameter.mode.toUpperCase()
+        : "";
+    const isOutOnlyParameter =
+      parameterMode === "FUNC_PARAM_OUT" ||
+      parameterMode === "FUNC_PARAM_TABLE";
+    const isOutputParameter =
+      isOutOnlyParameter || parameterMode === "FUNC_PARAM_INOUT";
     const argType = typeFromTypeNameNode(functionParameter?.argType);
     if (argType) {
       requires.push(argType);
+      if (isOutputParameter) {
+        outputArgTypes.push(argType);
+      }
+      if (isOutOnlyParameter) {
+        continue;
+      }
       signatureParts.push(typeSignaturePart(argType));
-    } else {
+    } else if (!isOutOnlyParameter) {
       signatureParts.push("unknown");
     }
   }
 
   const functionRef = objectFromNameParts(kind, functionNameParts);
-  const returnType = typeFromTypeNameNode(statementNode.returnType);
+  const explicitReturnType = typeFromTypeNameNode(statementNode.returnType);
+  const returnType =
+    explicitReturnType ??
+    (outputArgTypes.length === 1
+      ? (outputArgTypes[0] ?? null)
+      : outputArgTypes.length > 1
+        ? createObjectRefFromAst("type", "record")
+        : null);
   if (functionRef) {
     const argSignature = `(${signatureParts.join(",")})`;
     provides.push(
@@ -2172,6 +2195,7 @@ const builtInGistSupportOperatorStrategies = new Map([
   ["@>", [7]],
   ["<@", [8]],
   ["=", [6, 18]],
+  ["<->", [15]],
 ]);
 
 const builtInSpgistSupportOperatorStrategies = new Map([
@@ -2183,6 +2207,7 @@ const builtInSpgistSupportOperatorStrategies = new Map([
   ["<=", [12, 21]],
   [">=", [14, 23]],
   [">", [15, 22]],
+  ["<->", [15]],
   ["^@", [28]],
   ["<<", [1, 24]],
   ["&<", [2]],
@@ -2308,6 +2333,10 @@ const typeRefMatchesBuiltInBrinInclusionOperatorType = (
 
   return false;
 };
+
+const typeRefMatchesBuiltInDistanceSupportOperatorType = (
+  typeRef: ObjectRef | null,
+): boolean => typeRefMatchesBuiltInNames(typeRef, ["point"]);
 
 const builtInBtreeSupportOperatorTypeNames = new Set(
   [...builtInRangeOperatorClassSubtypes.values()].flat(),
@@ -2490,6 +2519,15 @@ const isBuiltInOperatorClassSupportOperatorName = (
   }
 
   if (args.length === 0) {
+    if (
+      name === "<->" &&
+      ["gist", "spgist"].includes(accessMethod.toLowerCase())
+    ) {
+      return typeRefMatchesBuiltInDistanceSupportOperatorType(
+        operatorClassDataTypeRef,
+      );
+    }
+
     return typeRefMatchesBuiltInSupportOperatorType(
       operatorClassDataTypeRef,
       context,
@@ -2515,6 +2553,13 @@ const isBuiltInOperatorClassSupportOperatorName = (
       rightArg,
       accessMethod,
     );
+  }
+
+  if (
+    name === "<->" &&
+    ["gist", "spgist"].includes(accessMethod.toLowerCase())
+  ) {
+    return typeRefMatchesBuiltInDistanceSupportOperatorType(leftArg);
   }
 
   return typeRefMatchesBuiltInSupportOperatorType(
@@ -3449,6 +3494,7 @@ const operatorEstimatorFunctionOptionNames = new Set(["restrict", "join"]);
 const operatorLinkOptionNames = new Set(["commutator", "negator"]);
 const builtInRestrictEstimatorFunctionNames = new Set([
   "areasel",
+  "arraycontsel",
   "contsel",
   "eqsel",
   "iclikesel",
@@ -3466,6 +3512,7 @@ const builtInRestrictEstimatorFunctionNames = new Set([
 
 const builtInJoinEstimatorFunctionNames = new Set([
   "areajoinsel",
+  "arraycontjoinsel",
   "contjoinsel",
   "eqjoinsel",
   "iclikejoinsel",
@@ -3683,12 +3730,19 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
       ["cidr", "cidr"],
     ],
   ],
+  ["numeric_add", [["numeric", "numeric"]]],
+  ["numeric_div", [["numeric", "numeric"]]],
   ["numeric_eq", [["numeric", "numeric"]]],
   ["numeric_ge", [["numeric", "numeric"]]],
   ["numeric_gt", [["numeric", "numeric"]]],
   ["numeric_le", [["numeric", "numeric"]]],
   ["numeric_lt", [["numeric", "numeric"]]],
+  ["numeric_mod", [["numeric", "numeric"]]],
+  ["numeric_mul", [["numeric", "numeric"]]],
   ["numeric_ne", [["numeric", "numeric"]]],
+  ["numeric_sub", [["numeric", "numeric"]]],
+  ["numeric_uplus", [["numeric"]]],
+  ["numeric_uminus", [["numeric"]]],
   ["oideq", [["oid", "oid"]]],
   ["oidge", [["oid", "oid"]]],
   ["oidgt", [["oid", "oid"]]],

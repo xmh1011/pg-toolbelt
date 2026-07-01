@@ -27,6 +27,7 @@ const BUILTIN_TYPES = new Set([
   "float8",
   "inet",
   "index_am_handler",
+  "int2vector",
   "int2",
   "int4",
   "int8",

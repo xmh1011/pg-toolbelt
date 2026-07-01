@@ -148,11 +148,24 @@ const PG_TYPE_ALIASES: Record<string, string> = {
   smallserial: "int2",
 };
 
+const splitSignatureArraySuffix = (
+  value: string,
+): { element: string; suffix: string } => {
+  let element = value;
+  let suffix = "";
+  while (element.endsWith("[]")) {
+    element = element.slice(0, -"[]".length);
+    suffix += "[]";
+  }
+  return { element, suffix };
+};
+
 const signatureArgBase = (value: string): string => {
   const parts = splitTopLevel(value, ".");
   const base = parts.at(-1) ?? value;
   const normalized = normalizeSignatureArg(base);
-  return PG_TYPE_ALIASES[normalized] ?? normalized;
+  const { element, suffix } = splitSignatureArraySuffix(normalized);
+  return `${PG_TYPE_ALIASES[element] ?? element}${suffix}`;
 };
 
 const signatureArgHasSchema = (value: string): boolean =>
@@ -166,8 +179,10 @@ const signatureArgSchema = (value: string): string | undefined => {
   return normalizeSignatureArg(parts.slice(0, -1).join("."));
 };
 
-const isKnownBuiltInSignatureType = (value: string): boolean =>
-  isKnownBuiltInTypeName(signatureArgBase(value));
+const isKnownBuiltInSignatureType = (value: string): boolean => {
+  const { element } = splitSignatureArraySuffix(signatureArgBase(value));
+  return isKnownBuiltInTypeName(element);
+};
 
 const schemaQualifiedBuiltInArgsCompatible = (
   requiredArg: string,

@@ -159,8 +159,8 @@ describe("diagnostics", () => {
     expect(unresolvedArrayType).toHaveLength(0);
   });
 
-  test("external range providers satisfy generated multirange requirements", async () => {
-    const result = await analyzeAndSort(
+  test("external range providers do not invent default multirange requirements", async () => {
+    const withoutMultirangeProvider = await analyzeAndSort(
       [
         "create schema app;",
         "create table app.events(spans app.period_multirange);",
@@ -176,18 +176,72 @@ describe("diagnostics", () => {
         ],
       },
     );
-    const unresolvedMultirangeType = result.diagnostics.filter(
+    const missingImplicitMultirange =
+      withoutMultirangeProvider.diagnostics.filter(
+        (diagnostic) =>
+          diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+          diagnostic.objectRefs?.some(
+            (ref) =>
+              ref.kind === "type" &&
+              ref.schema === "app" &&
+              ref.name === "period_multirange",
+          ) === true,
+      );
+
+    const withMultirangeProvider = await analyzeAndSort(
+      [
+        "create schema app;",
+        "create table app.events(spans app.period_multirange);",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "type",
+            schema: "app",
+            name: "period",
+            signature: "(range)",
+          },
+          {
+            kind: "type",
+            schema: "app",
+            name: "period_multirange",
+            signature: "(multirange)",
+          },
+        ],
+      },
+    );
+    const unresolvedExplicitMultirange =
+      withMultirangeProvider.diagnostics.filter(
+        (diagnostic) =>
+          diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+          diagnostic.objectRefs?.some(
+            (ref) =>
+              ref.kind === "type" &&
+              ref.schema === "app" &&
+              ref.name === "period_multirange",
+          ) === true,
+      );
+
+    expect(missingImplicitMultirange).toHaveLength(1);
+    expect(unresolvedExplicitMultirange).toHaveLength(0);
+  });
+
+  test("does not report unresolved unqualified built-in operator class and family comments", async () => {
+    const result = await analyzeAndSort([
+      "comment on operator class int4_ops using btree is 'built-in int4 opclass';",
+      "comment on operator family integer_ops using btree is 'built-in integer opfamily';",
+    ]);
+    const unresolvedBuiltIns = result.diagnostics.filter(
       (diagnostic) =>
         diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
         diagnostic.objectRefs?.some(
           (ref) =>
-            ref.kind === "type" &&
-            ref.schema === "app" &&
-            ref.name === "period_multirange",
+            (ref.kind === "operator_class" && ref.name === "int4_ops") ||
+            (ref.kind === "operator_family" && ref.name === "integer_ops"),
         ) === true,
     );
 
-    expect(unresolvedMultirangeType).toHaveLength(0);
+    expect(unresolvedBuiltIns).toHaveLength(0);
   });
 
   test("external domain providers satisfy generated array type requirements", async () => {
@@ -384,7 +438,7 @@ describe("diagnostics", () => {
     expect(missingDefault).toHaveLength(0);
   });
 
-  test("external range providers imply multirange default opclasses", async () => {
+  test("external multirange providers satisfy multirange default opclasses", async () => {
     const result = await analyzeAndSort(
       [
         "create schema app;",
@@ -393,6 +447,12 @@ describe("diagnostics", () => {
       {
         externalProviders: [
           { kind: "type", schema: "app", name: "period", signature: "(range)" },
+          {
+            kind: "type",
+            schema: "app",
+            name: "period_multirange",
+            signature: "(multirange)",
+          },
         ],
       },
     );

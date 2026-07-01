@@ -7079,6 +7079,28 @@ describe("range type dependencies", () => {
     expect(missingPublicOperator).toHaveLength(1);
   });
 
+  test("does not satisfy operator comments with same-name different-arg operators", async () => {
+    const result = await analyzeAndSort([
+      "comment on operator app.< (int4, int4) is 'less-than';",
+      "create operator app.< (function = app.text_lt, leftarg = text, rightarg = text);",
+      "create function app.text_lt(a text, b text) returns boolean language sql immutable strict as $$ select a < b $$;",
+      "create schema app;",
+    ]);
+    const missingOperatorCommentTarget = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<" &&
+            ref.signature === "(int4,int4)",
+        ) === true,
+    );
+
+    expect(missingOperatorCommentTarget).toHaveLength(1);
+  });
+
   test("does not report unresolved built-in access method comments", async () => {
     const result = await analyzeAndSort([
       "comment on access method btree is 'built-in btree access method';",
@@ -7133,6 +7155,80 @@ describe("range type dependencies", () => {
     );
 
     expect(missingCatalogCallback).toHaveLength(1);
+  });
+
+  test("does not match NONE support operators against binary providers", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create schema app;",
+        "create type app.score as (value int4);",
+        "create operator class app.score_ops for type app.score using btree as operator 1 app.! (NONE, app.score), function 1 app.score_cmp(app.score, app.score);",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "operator",
+            schema: "app",
+            name: "!",
+            signature: "(app.score,app.score)",
+          },
+          {
+            kind: "function",
+            schema: "app",
+            name: "score_cmp",
+            signature: "(app.score,app.score)->int4",
+          },
+        ],
+      },
+    );
+    const missingUnaryOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "!" &&
+            ref.signature === "(none,app.score)",
+        ) === true,
+    );
+    const bogusNoneType = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) => ref.kind === "type" && ref.name === "none",
+        ) === true,
+    );
+
+    expect(missingUnaryOperator).toHaveLength(1);
+    expect(bogusNoneType).toHaveLength(0);
+  });
+
+  test("honors annotated default operator class providers for omitted range subtype opclasses", async () => {
+    const result = await analyzeAndSort([
+      "create schema app;",
+      "create type app.score as (value int4);",
+      "-- pg-topo:provides operator_class:app.score_ops(btree,app.score)\ncreate extension score_ops;",
+      "create type app.score_range as range (subtype = app.score);",
+    ]);
+    const missingDefaultOperatorClass = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.message.includes("No default btree operator class provider"),
+    );
+    const orderedSql = result.ordered.map((statement) =>
+      statement.sql.toLowerCase(),
+    );
+    const extensionIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create extension score_ops"),
+    );
+    const rangeIndex = orderedSql.findIndex((sql) =>
+      sql.includes("create type app.score_range"),
+    );
+
+    expect(missingDefaultOperatorClass).toHaveLength(0);
+    expect(extensionIndex).toBeGreaterThanOrEqual(0);
+    expect(rangeIndex).toBeGreaterThan(extensionIndex);
   });
 
   test("does not match operator estimators against public shadow catalog args", async () => {

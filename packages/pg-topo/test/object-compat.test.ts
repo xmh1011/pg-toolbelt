@@ -142,6 +142,24 @@ describe("signaturesCompatible", () => {
     ).toBe(false);
   });
 
+  test("does not match explicit public shadow array types to bare built-in array signatures", () => {
+    const options = { requireExactArity: true };
+
+    expect(
+      signaturesCompatible("(cstring[])", "(pg_catalog.cstring[])", options),
+    ).toBe(true);
+    expect(
+      signaturesCompatible("(cstring[])", "(public.cstring[])", options),
+    ).toBe(false);
+    expect(
+      signaturesCompatible(
+        "(pg_catalog.cstring[])",
+        "(public.cstring[])",
+        options,
+      ),
+    ).toBe(false);
+  });
+
   test("matches unqualified built-in providers for pg_catalog requirements", () => {
     const options = { requireExactArity: true };
 

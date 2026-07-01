@@ -1226,6 +1226,36 @@ describe("range type dependencies", () => {
     });
   }, 120000);
 
+  test("matches range callbacks declared with OUT return parameters", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = int4, subtype_diff = app.diff);",
+      "create function app.diff(a int4, b int4, out result float8) language sql immutable strict as $$ select (a - b)::float8 $$;",
+      "create schema app;",
+    ]);
+    const unresolvedDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
+        ) === true,
+    );
+    const functionStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create function app.diff"),
+    );
+
+    expect(unresolvedDiff).toHaveLength(0);
+    expect(functionStatement?.provides).toContainEqual({
+      kind: "function",
+      schema: "app",
+      name: "diff",
+      signature: "(int4,int4)->float8",
+    });
+  }, 120000);
+
   test("requires exact range support routine signatures", async () => {
     const result = await analyzeAndSort([
       "create type app.score_range as range (subtype = int4, canonical = app.score_canonical);",
@@ -4994,6 +5024,7 @@ describe("range type dependencies", () => {
   test("does not require producers for built-in arithmetic operator callbacks", async () => {
     const result = await analyzeAndSort([
       "create operator app.+ (function = int4pl, leftarg = int4, rightarg = int4);",
+      "create operator app.+# (function = numeric_add, leftarg = numeric, rightarg = numeric);",
       "create schema app;",
     ]);
     const int4plUnresolved = result.diagnostics.filter(
@@ -5006,15 +5037,35 @@ describe("range type dependencies", () => {
             ref.signature === "(int4,int4)",
         ) === true,
     );
+    const numericAddUnresolved = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.name === "numeric_add" &&
+            ref.signature === "(numeric,numeric)",
+        ) === true,
+    );
     const operatorStatement = result.ordered.find((statement) =>
       statement.sql.toLowerCase().includes("create operator app.+"),
     );
+    const numericOperatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.+#"),
+    );
 
     expect(int4plUnresolved).toHaveLength(0);
+    expect(numericAddUnresolved).toHaveLength(0);
     expect(operatorStatement?.requires).not.toContainEqual(
       expect.objectContaining({
         kind: "function",
         name: "int4pl",
+      }),
+    );
+    expect(numericOperatorStatement?.requires).not.toContainEqual(
+      expect.objectContaining({
+        kind: "function",
+        name: "numeric_add",
       }),
     );
   });
@@ -5952,6 +6003,25 @@ describe("range type dependencies", () => {
     expect(unresolvedArrayOverlap).toHaveLength(0);
   });
 
+  test("accepts built-in array restriction estimators", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.@># (function = arraycontains, leftarg = anyarray, rightarg = anyarray, restrict = arraycontsel);",
+      "create schema app;",
+    ]);
+    const unresolvedEstimator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "arraycontsel",
+        ) === true,
+    );
+
+    expect(unresolvedEstimator).toHaveLength(0);
+  });
+
   test("accepts mixed built-in GIN jsonb support operators", async () => {
     const result = await analyzeAndSort([
       "create operator class app.jsonb_gin_ops for type jsonb using gin as operator 9 ? (jsonb, text), operator 10 ?| (jsonb, text[]), operator 11 ?& (jsonb, text[]);",
@@ -5993,6 +6063,27 @@ describe("range type dependencies", () => {
     );
 
     expect(unresolved).toHaveLength(0);
+  });
+
+  test("accepts built-in GiST and SP-GiST distance support operators", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.point_gist_ops for type point using gist as operator 15 <-> (point, point) for order by float_ops;",
+      "create operator class app.point_spgist_ops for type point using spgist as operator 15 <-> (point, point) for order by float_ops;",
+      "create schema app;",
+    ]);
+    const unresolvedDistanceOperators = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "<->" &&
+            ref.signature === "(point,point)",
+        ) === true,
+    );
+
+    expect(unresolvedDistanceOperators).toHaveLength(0);
   });
 
   test("accepts jsonpath and text-search GIN support operators", async () => {
@@ -6139,6 +6230,37 @@ describe("range type dependencies", () => {
     );
 
     expect(missingJsonpath).toHaveLength(0);
+  });
+
+  test("accepts valid pg_catalog types outside the local built-in allow-list", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator app.=== (function = app.int2vector_eq, leftarg = pg_catalog.int2vector, rightarg = pg_catalog.int2vector);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "int2vector_eq",
+            signature: "(pg_catalog.int2vector,pg_catalog.int2vector)",
+          },
+        ],
+      },
+    );
+    const missingInt2vector = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "pg_catalog" &&
+            ref.name === "int2vector",
+        ) === true,
+    );
+
+    expect(missingInt2vector).toHaveLength(0);
   });
 
   test("accepts built-in btree name_ops operator families", async () => {

@@ -7408,6 +7408,28 @@ describe("range type dependencies", () => {
     expect(missingComparator).toHaveLength(1);
   });
 
+  test("requires btree options support callbacks to return void", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using btree as function 5 app.score_options(internal);",
+      "create function app.score_options(value internal) returns int4 language internal stable strict as 'bttoptions';",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingOptions = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "score_options" &&
+            ref.signature === "(internal)->void",
+        ) === true,
+    );
+
+    expect(missingOptions).toHaveLength(1);
+  });
+
   test("requires base type callbacks to return PostgreSQL callback types", async () => {
     const result = await analyzeAndSort([
       "create type app.score (input = app.score_in, output = app.score_out, send = app.score_send, internallength = 4, alignment = int4);",

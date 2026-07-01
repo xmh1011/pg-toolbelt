@@ -81,6 +81,7 @@ export type AlterTable =
   | AlterTableForceRowLevelSecurity
   | AlterTableNoForceRowLevelSecurity
   | AlterTableResetStorageParams
+  | AlterTableSetCluster
   | AlterTableSetLogged
   | AlterTableSetReplicaIdentity
   | AlterTableSetStorageParams
@@ -538,6 +539,37 @@ export class AlterTableSetReplicaIdentity extends AlterTableChange {
 }
 
 /**
+ * ALTER TABLE ... CLUSTER ON ...
+ */
+export class AlterTableSetCluster extends AlterTableChange {
+  public readonly table: Table;
+  public readonly indexName: string;
+  public readonly scope = "object" as const;
+
+  constructor(props: { table: Table; indexName: string }) {
+    super();
+    this.table = props.table;
+    this.indexName = props.indexName;
+  }
+
+  get requires() {
+    return [
+      this.table.stableId,
+      stableId.index(this.table.schema, this.table.name, this.indexName),
+    ];
+  }
+
+  serialize(_options?: SerializeOptions): string {
+    return [
+      "ALTER TABLE",
+      `${this.table.schema}.${this.table.name}`,
+      "CLUSTER ON",
+      this.indexName,
+    ].join(" ");
+  }
+}
+
+/**
  * ALTER TABLE ... ADD COLUMN ...
  */
 export class AlterTableAddColumn extends AlterTableChange {
@@ -678,10 +710,12 @@ export class AlterTableAlterColumnType extends AlterTableChange {
     // previousColumn is optional so direct serializer tests/fixtures can keep
     // emitting canonical ALTER TYPE SQL without forcing a USING expression.
     // When provided, we can detect true type changes and add USING for casts
-    // PostgreSQL cannot perform automatically.
+    // PostgreSQL cannot perform automatically. Generated columns cannot use a
+    // USING clause; their expression reset/set flow handles incompatible types.
     const hasTypeChangedWithPreviousDefinition =
       this.previousColumn?.data_type_str !== undefined &&
-      this.previousColumn.data_type_str !== this.column.data_type_str;
+      this.previousColumn.data_type_str !== this.column.data_type_str &&
+      !this.column.is_generated;
 
     const parts: string[] = [
       "ALTER TABLE",
@@ -762,6 +796,12 @@ export class AlterTableAlterColumnDropDefault extends AlterTableChange {
     return [
       stableId.column(this.table.schema, this.table.name, this.column.name),
     ];
+  }
+
+  get invalidates() {
+    return this.column.is_generated
+      ? [stableId.column(this.table.schema, this.table.name, this.column.name)]
+      : [];
   }
 
   serialize(_options?: SerializeOptions): string {

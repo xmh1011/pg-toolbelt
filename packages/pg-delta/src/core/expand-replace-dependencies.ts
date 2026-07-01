@@ -47,6 +47,7 @@ import {
   AlterTableAlterColumnType,
   AlterTableDropConstraint,
   AlterTableDropColumn,
+  AlterTableSetCluster,
   AlterTableSetReplicaIdentity,
 } from "./objects/table/changes/table.alter.ts";
 import {
@@ -1178,14 +1179,56 @@ function buildConstraintBackingIndexMetadataReplacementChanges(
     ),
   );
 
+  changes.push(
+    ...buildIndexClusterReplacementChanges(backingIndex, branchCatalog, [
+      ...existingChanges,
+      ...changes,
+    ]),
+  );
+
   return changes;
+}
+
+function splitStableIdPath(path: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < path.length; index += 1) {
+    const char = path[index] ?? "";
+    const nextChar = path[index + 1];
+
+    if (char === '"') {
+      current += char;
+      if (inQuotes && nextChar === '"') {
+        current += nextChar;
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "." && !inQuotes) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  parts.push(current);
+  return parts;
 }
 
 function parseConstraintStableId(
   constraintStableId: string,
 ): { schema: string; table: string; constraint: string } | null {
   if (!constraintStableId.startsWith("constraint:")) return null;
-  const parts = constraintStableId.slice("constraint:".length).split(".");
+  const parts = splitStableIdPath(
+    constraintStableId.slice("constraint:".length),
+  );
   if (parts.length < 3) return null;
   const [schema, table, ...constraintParts] = parts;
   return { schema, table, constraint: constraintParts.join(".") };
@@ -1225,7 +1268,7 @@ function parseColumnStableId(
   columnStableId: string,
 ): { schema: string; table: string; column: string } | null {
   if (!columnStableId.startsWith("column:")) return null;
-  const parts = columnStableId.slice("column:".length).split(".");
+  const parts = splitStableIdPath(columnStableId.slice("column:".length));
   if (parts.length < 3) return null;
   const [schema, table, ...columnParts] = parts;
   return { schema, table, column: columnParts.join(".") };
@@ -1375,19 +1418,15 @@ function normalizeDependentId(dependentId: string): string | null {
   }
 
   if (id.startsWith("column:")) {
-    const parts = id.slice("column:".length).split(".");
-    if (parts.length >= 2) {
-      const [schema, table] = parts;
-      return `table:${schema}.${table}`;
-    }
+    const columnRef = parseColumnStableId(id);
+    if (columnRef) return stableId.table(columnRef.schema, columnRef.table);
     return null;
   }
 
   if (id.startsWith("constraint:")) {
-    const parts = id.slice("constraint:".length).split(".");
-    if (parts.length >= 2) {
-      const [schema, table] = parts;
-      return `table:${schema}.${table}`;
+    const constraintRef = parseConstraintStableId(id);
+    if (constraintRef) {
+      return stableId.table(constraintRef.schema, constraintRef.table);
     }
     return null;
   }
@@ -1688,6 +1727,11 @@ function buildReplaceChanges(
                 existingChanges,
               ),
               ...buildIndexReplicaIdentityReplacementChanges(
+                resolved.branch,
+                branchCatalog,
+                existingChanges,
+              ),
+              ...buildIndexClusterReplacementChanges(
                 resolved.branch,
                 branchCatalog,
                 existingChanges,
@@ -2133,6 +2177,24 @@ function buildIndexReplicaIdentityReplacementChanges(
     table: branchTable,
     mode: "i",
     indexName: branchTable.replica_identity_index,
+  });
+  return hasEquivalentReplacementMetadataChange(change, existingChanges)
+    ? []
+    : [change];
+}
+
+function buildIndexClusterReplacementChanges(
+  index: Catalog["indexes"][string],
+  branchCatalog: Catalog | undefined,
+  existingChanges: readonly Change[],
+): Change[] {
+  if (!branchCatalog || !index.is_clustered) return [];
+  const branchTable = branchCatalog.tables[index.tableStableId];
+  if (!branchTable) return [];
+
+  const change = new AlterTableSetCluster({
+    table: branchTable,
+    indexName: index.name,
   });
   return hasEquivalentReplacementMetadataChange(change, existingChanges)
     ? []

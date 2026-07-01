@@ -90,16 +90,19 @@ export function convertExplicitRequirementsToConstraints(
 
     if (requiredIds.size === 0) continue;
 
-    // Collect dropped IDs for this change so we can skip requirements
-    // for stableIds that this change also drops.  A change that drops a
-    // stableId should not depend on another change that creates the same
-    // stableId, because the entity already exists in the source database.
-    // This prevents false ordering constraints such as Grant → Revoke
-    // when both operate on the same ACL stableId.
+    // Collect stable IDs this change removes or rewrites in place so we can
+    // skip requirements for the same IDs. A change that drops/invalidates a
+    // stableId should not depend on another change that produces that same
+    // stableId, because the entity already exists before the plan runs. This
+    // prevents false ordering constraints such as Grant -> Revoke for ACLs and
+    // cycles between multiple same-column in-place ALTERs.
     const droppedIds = new Set<string>(phaseChanges[consumerIndex].drops);
+    const invalidatedIds = new Set<string>(
+      phaseChanges[consumerIndex].invalidates,
+    );
 
     for (const requiredId of requiredIds) {
-      if (droppedIds.has(requiredId)) {
+      if (droppedIds.has(requiredId) || invalidatedIds.has(requiredId)) {
         continue;
       }
 

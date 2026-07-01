@@ -3513,6 +3513,90 @@ describe("expandReplaceDependencies", () => {
     expect(grants[0]?.columns).toEqual(["value"]);
   });
 
+  test("restores retained comments for covered regular-to-generated column recreation", async () => {
+    const baseline = await createEmptyCatalog(150000, "postgres");
+    const mainProcedure = procedureWithArgs(["integer"]);
+    const branchProcedure = new Procedure({
+      // oxlint-disable-next-line typescript/no-misused-spread
+      ...mainProcedure,
+      argument_names: ["renamed"],
+      definition:
+        "CREATE FUNCTION public.normalize_value(renamed integer) RETURNS integer",
+    });
+    const mainTable = tableWithDefault("public.normalize_value(value)", {
+      comment: "computed value",
+    });
+    const branchTable = tableWithDefault("public.normalize_value(value)", {
+      is_generated: true,
+      comment: "computed value",
+    });
+    const columnId = "column:public.items.value";
+    const commentId = `comment:${columnId}`;
+    const preExistingDropColumn = new AlterTableDropColumn({
+      table: mainTable,
+      column: mainTable.columns[0],
+    });
+    const preExistingAddColumn = new AlterTableAddColumn({
+      table: branchTable,
+      column: branchTable.columns[0],
+    });
+
+    const changes: Change[] = [
+      new DropProcedure({ procedure: mainProcedure }),
+      new CreateProcedure({ procedure: branchProcedure }),
+      preExistingDropColumn,
+      preExistingAddColumn,
+    ];
+    const mainCatalog = new Catalog({
+      // oxlint-disable-next-line typescript/no-misused-spread
+      ...baseline,
+      procedures: { [mainProcedure.stableId]: mainProcedure },
+      tables: { [mainTable.stableId]: mainTable },
+      depends: [
+        {
+          dependent_stable_id: columnId,
+          referenced_stable_id: mainProcedure.stableId,
+          deptype: "n",
+        },
+        {
+          dependent_stable_id: commentId,
+          referenced_stable_id: columnId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = new Catalog({
+      // oxlint-disable-next-line typescript/no-misused-spread
+      ...baseline,
+      procedures: { [branchProcedure.stableId]: branchProcedure },
+      tables: { [branchTable.stableId]: branchTable },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+      diffContext: {
+        version: 150000,
+        currentUser: "postgres",
+        defaultPrivilegeState: new DefaultPrivilegeState({}),
+      },
+    });
+
+    expect(expanded.changes).toContain(preExistingDropColumn);
+    expect(expanded.changes).toContain(preExistingAddColumn);
+    expect(
+      expanded.changes.filter(
+        (change) => change instanceof CreateCommentOnColumn,
+      ),
+    ).toHaveLength(1);
+    expect(expanded.changes.some((change) => change instanceof DropTable)).toBe(
+      false,
+    );
+    expect(expanded.replacedTableIds.has(mainTable.stableId)).toBe(false);
+  });
+
   test("restores retained security labels without replacing the table when recreating a generated column", async () => {
     const baseline = await createEmptyCatalog(150000, "postgres");
     const mainProcedure = procedureWithArgs(["integer"]);
@@ -5654,6 +5738,86 @@ describe("expandReplaceDependencies", () => {
         (change) => change instanceof AlterTableAlterColumnSetDefault,
       ),
     ).toBe(true);
+  });
+
+  test("restores retained owned sequence defaults on the branch owning table", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const mainProcedure = procedureWithArgs(["integer"]);
+    const branchProcedure = procedureWithArgs(["bigint"]);
+    const columnDefault = "nextval('public.items_value_seq'::regclass)";
+    const mainTable = tableWithDefault(columnDefault);
+    const branchTable = tableWithDefault(columnDefault);
+    const mainArchiveTable = tableNamedWithDefault(
+      "archived_items",
+      columnDefault,
+      { name: "archived_value" },
+    );
+    const branchArchiveTable = tableNamedWithDefault(
+      "archived_items",
+      columnDefault,
+      { name: "archived_value" },
+    );
+    const mainSequence = sequenceOwnedByItemsValue();
+    const branchSequence = new Sequence({
+      // oxlint-disable-next-line typescript/no-misused-spread
+      ...mainSequence,
+      owned_by_table: "archived_items",
+      owned_by_column: "archived_value",
+    });
+
+    const changes: Change[] = [
+      new DropProcedure({ procedure: mainProcedure }),
+      new CreateProcedure({ procedure: branchProcedure }),
+    ];
+    const mainCatalog = new Catalog({
+      // oxlint-disable-next-line typescript/no-misused-spread
+      ...baseline,
+      procedures: { [mainProcedure.stableId]: mainProcedure },
+      tables: {
+        [mainTable.stableId]: mainTable,
+        [mainArchiveTable.stableId]: mainArchiveTable,
+      },
+      sequences: { [mainSequence.stableId]: mainSequence },
+      depends: [
+        {
+          dependent_stable_id: mainTable.stableId,
+          referenced_stable_id: mainProcedure.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = new Catalog({
+      // oxlint-disable-next-line typescript/no-misused-spread
+      ...baseline,
+      procedures: { [branchProcedure.stableId]: branchProcedure },
+      tables: {
+        [branchTable.stableId]: branchTable,
+        [branchArchiveTable.stableId]: branchArchiveTable,
+      },
+      sequences: { [branchSequence.stableId]: branchSequence },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+      diffContext: {
+        version: 170000,
+        currentUser: "postgres",
+        defaultPrivilegeState: new DefaultPrivilegeState({}),
+      },
+    });
+    const setDefaultChanges = expanded.changes.filter(
+      (change): change is AlterTableAlterColumnSetDefault =>
+        change instanceof AlterTableAlterColumnSetDefault,
+    );
+
+    expect(
+      setDefaultChanges.map(
+        (change) => `${change.table.name}.${change.column.name}`,
+      ),
+    ).toContain("archived_items.archived_value");
   });
 
   test("replays sequences cascaded by main-side promoted table ownership", async () => {

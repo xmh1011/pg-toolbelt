@@ -4,8 +4,10 @@ import type { Change } from "../change.types.ts";
 import type { PgDepend } from "../depend.ts";
 import {
   AlterDomainAddConstraint,
+  AlterDomainChangeOwner,
   AlterDomainDropConstraint,
   AlterDomainDropDefault,
+  AlterDomainSetDefault,
 } from "../objects/domain/changes/domain.alter.ts";
 import { DropDomain } from "../objects/domain/changes/domain.drop.ts";
 import { Domain } from "../objects/domain/domain.model.ts";
@@ -582,6 +584,32 @@ describe("sortChanges", () => {
     expect(ownerIndex).toBeGreaterThan(commentIndex);
   });
 
+  test("orders quoted-dot table trigger metadata before table owner restore", async () => {
+    const owningTable = table('"a.b"');
+    const trigger = triggerOnTable('"a.b"', {
+      name: "audit_trigger",
+      definition:
+        'CREATE TRIGGER audit_trigger AFTER UPDATE ON public."a.b" FOR EACH ROW EXECUTE FUNCTION public.audit_row()',
+    });
+    const changes: Change[] = [
+      new AlterTableChangeOwner({ table: owningTable, owner: "app_owner" }),
+      new CreateCommentOnTrigger({ trigger }),
+    ];
+    const mainCatalog = await catalogWithDepends([]);
+    const branchCatalog = await catalogWithDepends([]);
+
+    const sorted = sortChanges({ mainCatalog, branchCatalog }, changes);
+    const commentIndex = sorted.findIndex(
+      (change) => change instanceof CreateCommentOnTrigger,
+    );
+    const ownerIndex = sorted.findIndex(
+      (change) => change instanceof AlterTableChangeOwner,
+    );
+
+    expect(commentIndex).toBeGreaterThan(-1);
+    expect(ownerIndex).toBeGreaterThan(commentIndex);
+  });
+
   test("orders view metadata replay before view owner restore", async () => {
     const retainedView = new View({
       schema: "public",
@@ -1124,6 +1152,41 @@ describe("sortChanges", () => {
       "AlterDomainDropDefault",
       `DropProcedure:${mainProcedure.stableId}`,
     ]);
+  });
+
+  test("orders domain expression replay before domain owner restore", async () => {
+    const branchDomain = new Domain({
+      // oxlint-disable-next-line typescript/no-misused-spread
+      ...domainWithConstraint("score_check", "VALUE > 0"),
+      default_bin: "public.normalize_value(1)",
+      default_value: "public.normalize_value(1)",
+      owner: "app_owner",
+    });
+    const addConstraint = new AlterDomainAddConstraint({
+      domain: branchDomain,
+      constraint: branchDomain.constraints[0],
+    });
+    const setDefault = new AlterDomainSetDefault({
+      domain: branchDomain,
+      defaultValue: "public.normalize_value(1)",
+    });
+    const ownerRestore = new AlterDomainChangeOwner({
+      domain: branchDomain,
+      owner: "app_owner",
+    });
+    const changes: Change[] = [ownerRestore, setDefault, addConstraint];
+    const mainCatalog = await catalogWithDepends([]);
+    const branchCatalog = await catalogWithDepends([]);
+
+    const sorted = sortChanges({ mainCatalog, branchCatalog }, changes);
+    const setDefaultIndex = sorted.indexOf(setDefault);
+    const addConstraintIndex = sorted.indexOf(addConstraint);
+    const ownerIndex = sorted.indexOf(ownerRestore);
+
+    expect(setDefaultIndex).toBeGreaterThan(-1);
+    expect(addConstraintIndex).toBeGreaterThan(-1);
+    expect(ownerIndex).toBeGreaterThan(setDefaultIndex);
+    expect(ownerIndex).toBeGreaterThan(addConstraintIndex);
   });
 
   test("orders unchanged domain check replacement around same-signature procedure replacement", async () => {

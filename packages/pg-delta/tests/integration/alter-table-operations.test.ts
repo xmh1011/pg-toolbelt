@@ -677,10 +677,59 @@ for (const pgVersion of POSTGRES_VERSIONS) {
             expect(sqlStatements).toMatchInlineSnapshot(`
               [
                 "ALTER TABLE test_schema.generated_incompatible_own_type ALTER COLUMN status_code SET EXPRESSION AS (NULL::integer)",
-                "ALTER TABLE test_schema.generated_incompatible_own_type ALTER COLUMN status_code TYPE text USING status_code::text",
+                "ALTER TABLE test_schema.generated_incompatible_own_type ALTER COLUMN status_code TYPE text",
                 "ALTER TABLE test_schema.generated_incompatible_own_type ALTER COLUMN status_code SET EXPRESSION AS (upper(status))",
               ]
             `);
+          },
+        });
+      }),
+    );
+
+    test.skipIf(pgVersion < 17)(
+      "postgres 17 drops generated column indexes before resetting incompatible expressions",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+          CREATE SCHEMA test_schema;
+          CREATE TABLE test_schema.generated_index_reset_order (
+            status text NOT NULL,
+            status_code integer GENERATED ALWAYS AS (length(status)) STORED
+          );
+
+          CREATE UNIQUE INDEX generated_index_reset_order_status_code_idx
+            ON test_schema.generated_index_reset_order (status_code) NULLS NOT DISTINCT;
+
+          INSERT INTO test_schema.generated_index_reset_order (status)
+          VALUES ('a'), ('bb');
+        `,
+          testSql: `
+          ALTER TABLE test_schema.generated_index_reset_order
+            DROP COLUMN status_code;
+          ALTER TABLE test_schema.generated_index_reset_order
+            ADD COLUMN status_code text
+              GENERATED ALWAYS AS (upper(status)) STORED;
+          CREATE UNIQUE INDEX generated_index_reset_order_status_code_idx
+            ON test_schema.generated_index_reset_order (status_code) NULLS NOT DISTINCT;
+        `,
+          assertSqlStatements: (sqlStatements) => {
+            const dropIndex = sqlStatements.indexOf(
+              "DROP INDEX test_schema.generated_index_reset_order_status_code_idx",
+            );
+            const resetGenerated = sqlStatements.indexOf(
+              "ALTER TABLE test_schema.generated_index_reset_order ALTER COLUMN status_code SET EXPRESSION AS (NULL::integer)",
+            );
+            const recreateIndex = sqlStatements.findIndex((statement) =>
+              statement.startsWith(
+                "CREATE UNIQUE INDEX generated_index_reset_order_status_code_idx ON test_schema.generated_index_reset_order",
+              ),
+            );
+
+            expect(dropIndex).toBeGreaterThanOrEqual(0);
+            expect(resetGenerated).toBeGreaterThan(dropIndex);
+            expect(recreateIndex).toBeGreaterThan(resetGenerated);
           },
         });
       }),

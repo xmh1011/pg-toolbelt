@@ -18,6 +18,7 @@ import { Index } from "./objects/index/index.model.ts";
 import { CreateMaterializedView } from "./objects/materialized-view/changes/materialized-view.create.ts";
 import { DropMaterializedView } from "./objects/materialized-view/changes/materialized-view.drop.ts";
 import { MaterializedView } from "./objects/materialized-view/materialized-view.model.ts";
+import { stableId } from "./objects/utils.ts";
 import { AlterProcedureChangeOwner } from "./objects/procedure/changes/procedure.alter.ts";
 import { CreateCommentOnProcedure } from "./objects/procedure/changes/procedure.comment.ts";
 import { CreateProcedure } from "./objects/procedure/changes/procedure.create.ts";
@@ -4147,5 +4148,182 @@ describe("expandReplaceDependencies", () => {
 
     expect(expanded.changes).toHaveLength(1);
     expect(expanded.changes[0]).toBe(changes[0]);
+  });
+
+  test("parses quoted table stable ids when rebuilding generated columns and publications", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const tableName = '"a.b"';
+    const statusColumn = {
+      name: "status",
+      position: 1,
+      data_type: "text",
+      data_type_str: "text",
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: false,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: false,
+      collation: null,
+      default: null,
+      comment: null,
+    };
+    const statusLabelColumn = {
+      ...statusColumn,
+      name: "status_label",
+      position: 2,
+      is_generated: true,
+      default: "upper(status)",
+    };
+    const table = makeTable(tableName, [statusColumn, statusLabelColumn]);
+    const publication = makePublication({
+      tables: [
+        {
+          schema: "public",
+          name: tableName,
+          columns: ["status", "status_label"],
+          row_filter: null,
+        },
+      ],
+    });
+    const statusColumnId = stableId.column("public", tableName, "status");
+    const statusLabelColumnId = stableId.column(
+      "public",
+      tableName,
+      "status_label",
+    );
+    const changes: Change[] = [mockChange({ invalidates: [statusColumnId] })];
+    const mainCatalog = catalogWith(baseline, {
+      tables: { [table.stableId]: table },
+      publications: { [publication.stableId]: publication },
+      depends: [
+        {
+          dependent_stable_id: statusLabelColumnId,
+          referenced_stable_id: statusColumnId,
+          deptype: "n",
+        },
+        {
+          dependent_stable_id: publication.stableId,
+          referenced_stable_id: statusColumnId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      tables: { [table.stableId]: table },
+      publications: { [publication.stableId]: publication },
+      depends: mainCatalog.depends,
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    expect(
+      expanded.changes.some(
+        (change) =>
+          change instanceof AlterTableDropColumn &&
+          change.table.name === tableName &&
+          change.column.name === "status_label",
+      ),
+    ).toBe(true);
+    expect(
+      expanded.changes.some(
+        (change) =>
+          change instanceof AlterTableAddColumn &&
+          change.table.name === tableName &&
+          change.column.name === "status_label",
+      ),
+    ).toBe(true);
+    expect(
+      expanded.changes.some(
+        (change) =>
+          change instanceof AlterPublicationDropTables &&
+          change.tables.some((table) => table.name === tableName),
+      ),
+    ).toBe(true);
+    expect(
+      expanded.changes.some(
+        (change) =>
+          change instanceof AlterPublicationAddTables &&
+          change.tables.some((table) => table.name === tableName),
+      ),
+    ).toBe(true);
+  });
+
+  test("replays clustered index markers after invalidated column rebuilds", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const statusColumn = {
+      name: "status",
+      position: 1,
+      data_type: "text",
+      data_type_str: "text",
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: false,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: false,
+      collation: null,
+      default: null,
+      comment: null,
+    };
+    const table = makeTable("accounts", [statusColumn]);
+    const index = makeIndex({
+      name: "accounts_status_expr_idx",
+      is_clustered: true,
+      definition:
+        "CREATE INDEX accounts_status_expr_idx ON public.accounts USING btree (lower(status))",
+    });
+    const changes: Change[] = [
+      mockChange({ invalidates: ["column:public.accounts.status"] }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      tables: { [table.stableId]: table },
+      indexes: { [index.stableId]: index },
+      indexableObjects: { [table.stableId]: table },
+      depends: [
+        {
+          dependent_stable_id: index.stableId,
+          referenced_stable_id: "column:public.accounts.status",
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      tables: { [table.stableId]: table },
+      indexes: { [index.stableId]: index },
+      indexableObjects: { [table.stableId]: table },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+    const sorted = sortChanges(
+      { mainCatalog, branchCatalog },
+      expanded.changes,
+    );
+    const createIndexIdx = sorted.findIndex(
+      (change) =>
+        change instanceof CreateIndex &&
+        change.index.name === "accounts_status_expr_idx",
+    );
+    const clusterIdx = sorted.findIndex(
+      (change) => change.constructor.name === "AlterTableSetCluster",
+    );
+
+    expect(createIndexIdx).toBeGreaterThanOrEqual(0);
+    expect(clusterIdx).toBeGreaterThan(createIndexIdx);
   });
 });

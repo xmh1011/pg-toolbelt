@@ -1262,7 +1262,7 @@ describe.concurrent("table.diff", () => {
 
     expect(changes.map((change) => change.serialize())).toEqual([
       "ALTER TABLE public.t_generated_incompatible_type ALTER COLUMN status_code SET EXPRESSION AS (NULL::integer)",
-      "ALTER TABLE public.t_generated_incompatible_type ALTER COLUMN status_code TYPE text USING status_code::text",
+      "ALTER TABLE public.t_generated_incompatible_type ALTER COLUMN status_code TYPE text",
       "ALTER TABLE public.t_generated_incompatible_type ALTER COLUMN status_code SET EXPRESSION AS (upper(status))",
     ]);
   });

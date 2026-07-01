@@ -24,6 +24,7 @@ import {
   AlterTableNoForceRowLevelSecurity,
   AlterTableResetStorageParams,
   AlterTableSetLogged,
+  AlterTableSetCluster,
   AlterTableSetReplicaIdentity,
   AlterTableSetStorageParams,
   AlterTableSetUnlogged,
@@ -391,6 +392,44 @@ describe.concurrent("table", () => {
       );
     });
 
+    test("cluster marker", async () => {
+      const table = new Table({
+        schema: "public",
+        name: "test_table",
+        persistence: "p",
+        row_security: false,
+        force_row_security: false,
+        has_indexes: false,
+        has_rules: false,
+        has_triggers: false,
+        has_subclasses: false,
+        is_populated: false,
+        replica_identity: "d",
+        is_partition: false,
+        options: null,
+        partition_bound: null,
+        partition_by: null,
+        parent_schema: null,
+        parent_name: null,
+        owner: "o1",
+        columns: [],
+        privileges: [],
+      });
+      const change = new AlterTableSetCluster({
+        table,
+        indexName: "test_table_lookup_idx",
+      });
+
+      await assertValidSql(change.serialize());
+      expect(change.serialize()).toBe(
+        "ALTER TABLE public.test_table CLUSTER ON test_table_lookup_idx",
+      );
+      expect(change.requires).toEqual([
+        "table:public.test_table",
+        "index:public.test_table.test_table_lookup_idx",
+      ]);
+    });
+
     test("columns add/drop/alter", async () => {
       const tableProps: Omit<TableProps, "owner" | "options"> = {
         schema: "public",
@@ -511,6 +550,36 @@ describe.concurrent("table", () => {
       await assertValidSql(changeDropDefault.serialize());
       expect(changeDropDefault.serialize()).toBe(
         "ALTER TABLE public.test_table ALTER COLUMN a DROP DEFAULT",
+      );
+
+      const generatedColumn: ColumnProps = {
+        ...colText,
+        name: "computed_name",
+        is_generated: true,
+        default: "lower((b))",
+      };
+      const changeResetGeneratedExpression =
+        new AlterTableAlterColumnDropDefault({
+          table: withCols,
+          column: generatedColumn,
+          previousColumn: { ...generatedColumn, data_type_str: "integer" },
+        });
+      await assertValidSql(changeResetGeneratedExpression.serialize());
+      expect(changeResetGeneratedExpression.serialize()).toBe(
+        "ALTER TABLE public.test_table ALTER COLUMN computed_name SET EXPRESSION AS (NULL::integer)",
+      );
+      expect(changeResetGeneratedExpression.invalidates).toEqual([
+        "column:public.test_table.computed_name",
+      ]);
+
+      const changeGeneratedType = new AlterTableAlterColumnType({
+        table: withCols,
+        column: generatedColumn,
+        previousColumn: { ...generatedColumn, data_type_str: "integer" },
+      });
+      await assertValidSql(changeGeneratedType.serialize());
+      expect(changeGeneratedType.serialize()).toBe(
+        "ALTER TABLE public.test_table ALTER COLUMN computed_name TYPE text",
       );
 
       const changeAddIdentity = new AlterTableAlterColumnAddIdentity({

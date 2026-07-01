@@ -8,6 +8,7 @@ import { Procedure } from "../objects/procedure/procedure.model.ts";
 import { AlterPublicationDropTables } from "../objects/publication/changes/publication.alter.ts";
 import { Publication } from "../objects/publication/publication.model.ts";
 import {
+  AlterTableAlterColumnDropDefault,
   AlterTableAlterColumnType,
   AlterTableDropColumn,
   AlterTableDropConstraint,
@@ -259,6 +260,9 @@ function changeLabel(change: Change) {
   if (change instanceof AlterTableAlterColumnType) {
     return `${change.constructor.name}:${change.table.name}.${change.column.name}`;
   }
+  if (change instanceof AlterTableAlterColumnDropDefault) {
+    return `${change.constructor.name}:${change.table.name}.${change.column.name}`;
+  }
   if (change instanceof AlterTableDropColumn) {
     return `${change.constructor.name}:${change.table.name}.${change.column.name}`;
   }
@@ -315,6 +319,43 @@ describe("sortChanges", () => {
       "DropView",
       "AlterTableAlterColumnType:users.age",
       "CreateView",
+    ]);
+  });
+
+  test("orders same-column generated expression reset before type rewrite without a cycle", async () => {
+    const branchTable = table("accounts");
+    const mainColumn = {
+      ...integerColumn("status_code", 2),
+      is_generated: true,
+      default: "length(status)",
+    };
+    const branchColumn = {
+      ...integerColumn("status_code", 2),
+      data_type: "text",
+      data_type_str: "text",
+      is_generated: true,
+      default: "upper(status)",
+    };
+    const changes: Change[] = [
+      new AlterTableAlterColumnDropDefault({
+        table: branchTable,
+        column: branchColumn,
+        previousColumn: mainColumn,
+      }),
+      new AlterTableAlterColumnType({
+        table: branchTable,
+        column: branchColumn,
+        previousColumn: mainColumn,
+      }),
+    ];
+    const mainCatalog = await catalogWithDepends([]);
+    const branchCatalog = await catalogWithDepends([]);
+
+    const sorted = sortChanges({ mainCatalog, branchCatalog }, changes);
+
+    expect(sorted.map(changeLabel)).toEqual([
+      "AlterTableAlterColumnDropDefault:accounts.status_code",
+      "AlterTableAlterColumnType:accounts.status_code",
     ]);
   });
 

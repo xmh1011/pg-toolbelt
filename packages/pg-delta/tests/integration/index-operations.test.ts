@@ -332,5 +332,57 @@ for (const pgVersion of POSTGRES_VERSIONS) {
         });
       }),
     );
+
+    test(
+      "cluster marker is preserved when a column rewrite rebuilds a dependent index",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+          CREATE SCHEMA test_schema;
+          CREATE TABLE test_schema.clustered_accounts (
+            id integer,
+            status text
+          );
+          CREATE INDEX clustered_accounts_status_idx
+            ON test_schema.clustered_accounts (status);
+          ALTER TABLE test_schema.clustered_accounts
+            CLUSTER ON clustered_accounts_status_idx;
+        `,
+          testSql: `
+          ALTER TABLE test_schema.clustered_accounts
+            ALTER COLUMN status TYPE varchar(32);
+        `,
+          assertSqlStatements: (statements) => {
+            const dropIndex = statements.findIndex((statement) =>
+              statement.startsWith(
+                "DROP INDEX test_schema.clustered_accounts_status_idx",
+              ),
+            );
+            const alterColumn = statements.findIndex((statement) =>
+              statement.startsWith(
+                "ALTER TABLE test_schema.clustered_accounts ALTER COLUMN status TYPE character varying(32)",
+              ),
+            );
+            const createIndex = statements.findIndex((statement) =>
+              statement.startsWith(
+                "CREATE INDEX clustered_accounts_status_idx ON test_schema.clustered_accounts",
+              ),
+            );
+            const clusterIndex = statements.findIndex((statement) =>
+              statement.startsWith(
+                "ALTER TABLE test_schema.clustered_accounts CLUSTER ON clustered_accounts_status_idx",
+              ),
+            );
+
+            expect(dropIndex).toBeGreaterThanOrEqual(0);
+            expect(alterColumn).toBeGreaterThan(dropIndex);
+            expect(createIndex).toBeGreaterThan(alterColumn);
+            expect(clusterIndex).toBeGreaterThan(createIndex);
+          },
+        });
+      }),
+    );
   });
 }

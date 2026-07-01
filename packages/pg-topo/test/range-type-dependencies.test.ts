@@ -4892,6 +4892,38 @@ describe("range type dependencies", () => {
     expect(selfReferenceDiagnostics).toHaveLength(0);
   });
 
+  test("includes external domains in implicit array collision context", async () => {
+    const result = await analyzeAndSort(
+      ["create type app.foo as enum ('one', 'two');", "create schema app;"],
+      {
+        externalProviders: [{ kind: "domain", schema: "app", name: "_foo" }],
+      },
+    );
+    const enumStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create type app.foo as enum"),
+    );
+    const missingExternalDomain = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" && ref.schema === "app" && ref.name === "_foo",
+        ) === true,
+    );
+
+    expect(enumStatement?.provides).not.toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "_foo",
+    });
+    expect(enumStatement?.requires).toContainEqual({
+      kind: "type",
+      schema: "app",
+      name: "_foo",
+    });
+    expect(missingExternalDomain).toHaveLength(0);
+  });
+
   test("provides generated array typname aliases for custom types", async () => {
     const result = await analyzeAndSort([
       "create table app.people(id int primary key, moods app._mood not null);",
@@ -5634,7 +5666,7 @@ describe("range type dependencies", () => {
 
   test("does not require producers for unqualified BRIN minmax support routines", async () => {
     const result = await analyzeAndSort([
-      "create operator class app.int4_brin_ops for type int4 using brin as function 1 brin_minmax_opcinfo(internal);",
+      "create operator class app.int4_brin_ops for type int4 using brin as function 1 brin_minmax_opcinfo(internal), function 2 brin_minmax_add_value(internal, internal, internal, internal), function 3 brin_minmax_consistent(internal, internal, internal), function 4 brin_minmax_union(internal, internal, internal);",
       "create schema app;",
     ]);
     const unresolvedBrinMinmax = result.diagnostics.filter(
@@ -5644,8 +5676,12 @@ describe("range type dependencies", () => {
           (ref) =>
             ref.kind === "function" &&
             ref.schema === "public" &&
-            ref.name === "brin_minmax_opcinfo" &&
-            ref.signature === "(internal)",
+            [
+              "brin_minmax_opcinfo",
+              "brin_minmax_add_value",
+              "brin_minmax_consistent",
+              "brin_minmax_union",
+            ].includes(ref.name),
         ) === true,
     );
 
@@ -7062,6 +7098,44 @@ describe("range type dependencies", () => {
     expect(missingHeapIndexMethod).toHaveLength(1);
   });
 
+  test("reports duplicate access method names across access method types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create access method myam type index handler app.index_handler;",
+        "create access method myam type table handler app.table_handler;",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "index_handler",
+            signature: "(internal)->index_am_handler",
+          },
+          {
+            kind: "function",
+            schema: "app",
+            name: "table_handler",
+            signature: "(internal)->table_am_handler",
+          },
+        ],
+      },
+    );
+    const duplicateAccessMethod = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "DUPLICATE_PRODUCER" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "access_method" &&
+            ref.name === "myam" &&
+            ref.signature === undefined,
+        ) === true,
+    );
+
+    expect(duplicateAccessMethod.length).toBeGreaterThan(0);
+  });
+
   test("does not let catalog-typed operators satisfy public shadow opclasses", async () => {
     const result = await analyzeAndSort([
       "create operator class app.public_int4_ops for type public.int4 using btree as operator 1 app.<;",
@@ -7428,6 +7502,42 @@ describe("range type dependencies", () => {
     );
 
     expect(missingOptions).toHaveLength(1);
+  });
+
+  test("requires all options support callbacks to return void", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_hash_ops for type app.score using hash as function 3 app.hash_options(internal);",
+      "create operator class app.score_gist_ops for type app.score using gist as function 10 app.gist_options(internal);",
+      "create operator class app.score_spgist_ops for type app.score using spgist as function 6 app.spgist_options(internal);",
+      "create operator class app.score_gin_ops for type app.score using gin as function 7 app.gin_options(internal);",
+      "create operator class app.score_brin_ops for type app.score using brin as function 5 app.brin_options(internal);",
+      "create function app.hash_options(value internal) returns int4 language internal stable strict as 'hashoptions';",
+      "create function app.gist_options(value internal) returns int4 language internal stable strict as 'gistoptions';",
+      "create function app.spgist_options(value internal) returns int4 language internal stable strict as 'spgoptions';",
+      "create function app.gin_options(value internal) returns int4 language internal stable strict as 'ginoptions';",
+      "create function app.brin_options(value internal) returns int4 language internal stable strict as 'brinoptions';",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingOptions = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            [
+              "hash_options",
+              "gist_options",
+              "spgist_options",
+              "gin_options",
+              "brin_options",
+            ].includes(ref.name) &&
+            ref.signature === "(internal)->void",
+        ) === true,
+    );
+
+    expect(missingOptions).toHaveLength(5);
   });
 
   test("requires base type callbacks to return PostgreSQL callback types", async () => {

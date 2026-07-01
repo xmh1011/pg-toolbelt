@@ -354,8 +354,11 @@ export function expandReplaceDependencies({
       ) {
         continue;
       }
+      const columnRecreationCovered =
+        generatedColumnsRecreatedByExpressionFallback.has(refId) ||
+        columnsRecreatedByOriginalDiff.has(refId);
       if (
-        generatedColumnsRecreatedByExpressionFallback.has(refId) &&
+        columnRecreationCovered &&
         isMetadataDependentStableId(dependentRaw)
       ) {
         // Column comments and security labels are metadata for the recreated
@@ -372,7 +375,7 @@ export function expandReplaceDependencies({
         continue;
       }
       if (
-        generatedColumnsRecreatedByExpressionFallback.has(refId) &&
+        columnRecreationCovered &&
         isOwnerTableDependentForColumn(refId, dependentRaw)
       ) {
         // A table has catalog bookkeeping dependencies on its own columns. The
@@ -381,7 +384,7 @@ export function expandReplaceDependencies({
         continue;
       }
       if (
-        generatedColumnsRecreatedByExpressionFallback.has(refId) &&
+        columnRecreationCovered &&
         isGeneratedColumnNotNullConstraintDependent({
           columnId: refId,
           dependentId: dependentRaw,
@@ -2819,13 +2822,21 @@ function buildRetainedOwnedSequenceReplacementChanges({
     const ownedByColumn = branchSequence.owned_by_column;
     if (ownedByColumn === null) continue;
 
-    const ownedColumn = table.columns.find(
+    const ownedBySchema = branchSequence.owned_by_schema;
+    const ownedByTable = branchSequence.owned_by_table;
+    if (ownedBySchema === null || ownedByTable === null) continue;
+
+    const branchOwnedTable =
+      branchCatalog.tables[stableId.table(ownedBySchema, ownedByTable)];
+    if (!branchOwnedTable) continue;
+
+    const ownedColumn = branchOwnedTable.columns.find(
       (column) => column.name === ownedByColumn,
     );
     if (ownedColumn && ownedColumn.default !== null) {
       changes.push(
         new AlterTableAlterColumnSetDefault({
-          table,
+          table: branchOwnedTable,
           column: ownedColumn,
         }),
       );

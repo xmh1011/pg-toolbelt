@@ -1,6 +1,7 @@
 import type { Change } from "../change.types.ts";
 import { getSchema } from "../change-utils.ts";
 import { AlterAggregateChangeOwner } from "../objects/aggregate/changes/aggregate.alter.ts";
+import { AlterDomainChangeOwner } from "../objects/domain/changes/domain.alter.ts";
 import { AlterProcedureChangeOwner } from "../objects/procedure/changes/procedure.alter.ts";
 import { AlterPublicationSetOwner } from "../objects/publication/changes/publication.alter.ts";
 import {
@@ -260,7 +261,7 @@ function parseTableStableIdFromStableId(id: string): string | null {
   }
   const parseSubEntity = (prefix: string) => {
     if (!id.startsWith(prefix)) return null;
-    const parts = id.slice(prefix.length).split(".");
+    const parts = splitStableIdParts(id.slice(prefix.length));
     if (parts.length < 2) return null;
     return `table:${parts[0]}.${parts[1]}`;
   };
@@ -272,6 +273,31 @@ function parseTableStableIdFromStableId(id: string): string | null {
     parseSubEntity("rule:") ??
     parseSubEntity("rlsPolicy:")
   );
+}
+
+function splitStableIdParts(value: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let inQuotedIdentifier = false;
+
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+    if (char === '"') {
+      if (inQuotedIdentifier && value[index + 1] === '"') {
+        index++;
+        continue;
+      }
+      inQuotedIdentifier = !inQuotedIdentifier;
+      continue;
+    }
+    if (char === "." && !inQuotedIdentifier) {
+      parts.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+
+  parts.push(value.slice(start));
+  return parts;
 }
 
 function getRelatedTableStableIds(change: Change): Set<string> {
@@ -662,6 +688,83 @@ function generateRoutineOwnerRestoreLastConstraints(
   return constraints;
 }
 
+function parseDomainStableIdFromStableId(id: string): string | null {
+  if (id.startsWith("comment:")) {
+    return parseDomainStableIdFromStableId(id.slice("comment:".length));
+  }
+  if (id.startsWith("securityLabel:")) {
+    const objectId = id.slice("securityLabel:".length).split("::provider:")[0];
+    return parseDomainStableIdFromStableId(objectId);
+  }
+  if (id.startsWith("domain:")) {
+    return id;
+  }
+  return null;
+}
+
+function getRelatedDomainStableIds(change: Change): Set<string> {
+  const domainIds = new Set<string>();
+  if (
+    "domain" in change &&
+    change.domain &&
+    typeof change.domain === "object" &&
+    "stableId" in change.domain &&
+    typeof change.domain.stableId === "string"
+  ) {
+    domainIds.add(change.domain.stableId);
+  }
+  for (const id of [
+    ...change.creates,
+    ...change.drops,
+    ...change.requires,
+    ...change.invalidates,
+  ]) {
+    const domainId = parseDomainStableIdFromStableId(id);
+    if (domainId) domainIds.add(domainId);
+  }
+  return domainIds;
+}
+
+function generateDomainOwnerRestoreLastConstraints(
+  changes: Change[],
+): Constraint[] {
+  const constraints: Constraint[] = [];
+  const ownerChanges: Array<{ index: number; domainId: string }> = [];
+  const changesByDomain = new Map<string, number[]>();
+
+  for (let index = 0; index < changes.length; index++) {
+    const change = changes[index];
+    if (change instanceof AlterDomainChangeOwner) {
+      ownerChanges.push({
+        index,
+        domainId: change.domain.stableId,
+      });
+      continue;
+    }
+
+    const domainIds = getRelatedDomainStableIds(change);
+    for (const domainId of domainIds) {
+      const indexes = changesByDomain.get(domainId) ?? [];
+      indexes.push(index);
+      changesByDomain.set(domainId, indexes);
+    }
+  }
+
+  for (const ownerChange of ownerChanges) {
+    const relatedIndexes = changesByDomain.get(ownerChange.domainId) ?? [];
+    for (const relatedIndex of relatedIndexes) {
+      if (relatedIndex === ownerChange.index) continue;
+      constraints.push({
+        sourceChangeIndex: relatedIndex,
+        targetChangeIndex: ownerChange.index,
+        source: "custom",
+      });
+    }
+  }
+
+  return constraints;
+}
+
 function getRelatedPublicationStableIds(change: Change): Set<string> {
   const publicationIds = new Set<string>();
   if (
@@ -812,6 +915,7 @@ const customConstraintGenerators: ConstraintGenerator[] = [
   generateViewOwnerRestoreLastConstraints,
   generateSequenceOwnerRestoreLastConstraints,
   generateRoutineOwnerRestoreLastConstraints,
+  generateDomainOwnerRestoreLastConstraints,
   generatePublicationOwnerRestoreLastConstraints,
   generateOwnedSequenceAttachmentConstraints,
 ];

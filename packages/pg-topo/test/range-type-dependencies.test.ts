@@ -7455,4 +7455,126 @@ describe("range type dependencies", () => {
     expect(missingOutput).toHaveLength(1);
     expect(missingSend).toHaveLength(1);
   });
+
+  test("does not treat non-default local opclasses as omitted range subtype defaults", async () => {
+    const result = await analyzeAndSort([
+      "create type app.score_range as range (subtype = app.score);",
+      "create operator class app.score_ops for type app.score using btree as function 1 app.score_cmp(app.score, app.score);",
+      "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingDefault = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.message.includes(
+          "No default btree operator class provider found for range subtype 'app.score'",
+        ),
+    );
+
+    expect(missingDefault).toHaveLength(1);
+  });
+
+  test("does not allow set-returning functions to satisfy scalar range callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = int4, subtype_diff = app.diff);",
+      "create function app.diff(a int4, b int4) returns setof float8 language sql immutable as $$ select (a - b)::float8 $$;",
+      "create schema app;",
+    ]);
+    const missingScalarDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
+        ) === true,
+    );
+
+    expect(missingScalarDiff).toHaveLength(1);
+  });
+
+  test("does not report implicit built-in type refs as self references", async () => {
+    const result = await analyzeAndSort([
+      "create table public.int4 (value int4);",
+      "create domain public.float8 as float8;",
+    ]);
+    const builtInSelfReferences = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "public" &&
+            (ref.name === "int4" || ref.name === "float8"),
+        ) === true,
+    );
+
+    expect(builtInSelfReferences).toHaveLength(0);
+  });
+
+  test("keeps wrong-return local built-in shadows as range callback requirements", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = int4, subtype_diff = int4range_subdiff);",
+      "create function public.int4range_subdiff(a int4, b int4) returns int4 language sql immutable as $$ select a - b $$;",
+      "create schema app;",
+    ]);
+    const missingScalarDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "int4range_subdiff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
+        ) === true,
+    );
+
+    expect(missingScalarDiff).toHaveLength(1);
+  });
+
+  test("preserves explicit public built-in type refs when deduping implicit refs", async () => {
+    const result = await analyzeAndSort([
+      "create table app.t(a public.int4, b int4);",
+      "create schema app;",
+    ]);
+    const missingExplicitPublicInt = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "public" &&
+            ref.name === "int4",
+        ) === true,
+    );
+
+    expect(missingExplicitPublicInt).toHaveLength(1);
+  });
+
+  test("requires opclass search operators to return boolean", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using btree as operator 1 app.< (app.score, app.score);",
+      "create operator app.< (function = app.score_cmp, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingBooleanOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<" &&
+            ref.signature === "(app.score,app.score)->bool",
+        ) === true,
+    );
+
+    expect(missingBooleanOperator).toHaveLength(1);
+  });
 });

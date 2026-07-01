@@ -1077,12 +1077,7 @@ function isGeneratedColumnNotNullConstraintDependent({
     (branchColumn?.is_generated && branchColumn.not_null),
   );
 
-  return (
-    !modeledConstraint &&
-    constraintRef.constraint ===
-      `${columnRef.table}_${columnRef.column}_not_null` &&
-    generatedColumnNotNull
-  );
+  return !modeledConstraint && generatedColumnNotNull;
 }
 
 function maybeAddRecreatedColumnMetadataRestore({
@@ -2484,7 +2479,7 @@ function normalizeDependentId(
   }
 
   if (id.startsWith("column:")) {
-    const parts = id.slice("column:".length).split(".");
+    const parts = splitStableIdParts(id.slice("column:".length));
     if (parts.length >= 2) {
       const [schema, table] = parts;
       return `table:${schema}.${table}`;
@@ -2522,9 +2517,36 @@ interface ConstraintStableIdParts {
   constraint: string;
 }
 
+function splitStableIdParts(value: string): string[] {
+  const parts: string[] = [];
+  let partStart = 0;
+  let inQuotedIdentifier = false;
+
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+
+    if (char === '"') {
+      if (inQuotedIdentifier && value[index + 1] === '"') {
+        index++;
+        continue;
+      }
+      inQuotedIdentifier = !inQuotedIdentifier;
+      continue;
+    }
+
+    if (char === "." && !inQuotedIdentifier) {
+      parts.push(value.slice(partStart, index));
+      partStart = index + 1;
+    }
+  }
+
+  parts.push(value.slice(partStart));
+  return parts;
+}
+
 function parseColumnStableId(stableId: string): ColumnStableIdParts | null {
   if (!stableId.startsWith("column:")) return null;
-  const parts = stableId.slice("column:".length).split(".");
+  const parts = splitStableIdParts(stableId.slice("column:".length));
   if (parts.length < 3) return null;
   const [schema, table, ...columnParts] = parts;
   return {
@@ -2538,7 +2560,7 @@ function parseConstraintStableId(
   stableId: string,
 ): ConstraintStableIdParts | null {
   if (!stableId.startsWith("constraint:")) return null;
-  const parts = stableId.slice("constraint:".length).split(".");
+  const parts = splitStableIdParts(stableId.slice("constraint:".length));
   if (parts.length < 3) return null;
   const [schema, owner, ...constraintParts] = parts;
   return {

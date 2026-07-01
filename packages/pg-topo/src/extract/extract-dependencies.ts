@@ -1696,6 +1696,9 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
   ["brin_bloom_opcinfo", [["internal"]]],
   ["brin_inclusion_opcinfo", [["internal"]]],
   ["brin_minmax_opcinfo", [["internal"]]],
+  ["brin_minmax_add_value", [["internal", "internal", "internal", "internal"]]],
+  ["brin_minmax_consistent", [["internal", "internal", "internal"]]],
+  ["brin_minmax_union", [["internal", "internal", "internal"]]],
   ["brin_minmax_multi_opcinfo", [["internal"]]],
   ["btcharcmp", [["char", "char"]]],
   ["btequalimage", [["oid"]]],
@@ -1906,6 +1909,9 @@ const builtInBrinSupportFunctionNames = new Set([
   "brin_bloom_opcinfo",
   "brin_inclusion_opcinfo",
   "brin_minmax_opcinfo",
+  "brin_minmax_add_value",
+  "brin_minmax_consistent",
+  "brin_minmax_union",
   "brin_minmax_multi_opcinfo",
 ]);
 
@@ -1988,12 +1994,37 @@ const builtInOperatorClassSupportFunctionMatchesSlot = (
   }
 
   if (normalizedAccessMethod === "brin") {
-    return (
-      supportNumber === 1 &&
-      signature.length === 1 &&
-      signature[0] === "internal" &&
-      builtInBrinSupportFunctionNames.has(name)
-    );
+    if (supportNumber === 1) {
+      return (
+        signature.length === 1 &&
+        signature[0] === "internal" &&
+        builtInBrinSupportFunctionNames.has(name)
+      );
+    }
+
+    if (supportNumber === 2) {
+      return (
+        name === "brin_minmax_add_value" &&
+        signature.length === 4 &&
+        signature.every((type) => type === "internal")
+      );
+    }
+
+    if (supportNumber === 3) {
+      return (
+        name === "brin_minmax_consistent" &&
+        signature.length === 3 &&
+        signature.every((type) => type === "internal")
+      );
+    }
+
+    if (supportNumber === 4) {
+      return (
+        name === "brin_minmax_union" &&
+        signature.length === 3 &&
+        signature.every((type) => type === "internal")
+      );
+    }
   }
 
   if (normalizedAccessMethod === "gist") {
@@ -2906,17 +2937,32 @@ const inferredOperatorClassSupportFunctionArgs = (
   return [];
 };
 
+const operatorClassOptionsSupportFunctionSlots: Record<string, number> = {
+  btree: 5,
+  hash: 3,
+  gist: 10,
+  spgist: 6,
+  gin: 7,
+  brin: 5,
+};
+
 const operatorClassSupportFunctionReturnType = (
   accessMethod: string,
   supportNumber: number,
 ): ObjectRef | null => {
   const normalizedAccessMethod = accessMethod.toLowerCase();
+  if (
+    operatorClassOptionsSupportFunctionSlots[normalizedAccessMethod] ===
+    supportNumber
+  ) {
+    return createObjectRefFromAst("type", "void");
+  }
 
   if (normalizedAccessMethod === "btree") {
     if (supportNumber === 1) {
       return createObjectRefFromAst("type", "int4");
     }
-    if (supportNumber === 2 || supportNumber === 5 || supportNumber === 6) {
+    if (supportNumber === 2 || supportNumber === 6) {
       return createObjectRefFromAst("type", "void");
     }
     if (supportNumber === 3 || supportNumber === 4) {
@@ -3187,7 +3233,7 @@ export const createExtractionContext = (
       continue;
     }
 
-    if (providerRef.kind !== "type") {
+    if (providerRef.kind !== "type" && providerRef.kind !== "domain") {
       continue;
     }
     const typeRef = createObjectRefFromAst(
@@ -4298,9 +4344,10 @@ const extractCreateAccessMethodDependencies = (
 
   const accessMethodKind = accessMethodKindFromAmType(statementNode.amtype);
   if (typeof statementNode.amname === "string") {
-    provides.push(
-      accessMethodRef(statementNode.amname, accessMethodKind ?? undefined),
-    );
+    provides.push(accessMethodRef(statementNode.amname));
+    if (accessMethodKind !== null) {
+      provides.push(accessMethodRef(statementNode.amname, accessMethodKind));
+    }
   }
 
   const handlerRef = objectFromNameParts(

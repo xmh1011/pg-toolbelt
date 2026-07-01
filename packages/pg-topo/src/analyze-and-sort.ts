@@ -5,7 +5,6 @@ import {
 } from "./classify/classify-statement.ts";
 import {
   createExtractionContext,
-  defaultMultirangeTypeName,
   defaultBtreeOperatorClassProviderRefForSubtype,
   domainBaseTypeRef,
   extractDependencies,
@@ -135,11 +134,33 @@ const addImplicitRangeOperatorClassDependencies = (
         return true;
       }
 
-      return (
-        providerRef.signature?.trim().toLowerCase() === "(range)" &&
-        defaultMultirangeTypeName(providerRef.name) === subtypeRef.name
-      );
+      return false;
     }) === true;
+
+  const subtypeOperatorClassSignature = (subtypeRef: ObjectRef): string => {
+    const subtypeSignature = subtypeRef.schema
+      ? `${subtypeRef.schema}.${subtypeRef.name}`
+      : subtypeRef.name;
+    return `(btree,${subtypeSignature})`;
+  };
+
+  const defaultBtreeOperatorClassProvidedRefForSubtype = (
+    providerRef: ObjectRef,
+    subtypeRef: ObjectRef,
+  ): ObjectRef | null => {
+    if (providerRef.kind !== "operator_class") {
+      return null;
+    }
+    if (
+      operatorClassSignaturesCompatible(
+        subtypeOperatorClassSignature(subtypeRef),
+        providerRef.signature,
+      )
+    ) {
+      return providerRef;
+    }
+    return null;
+  };
 
   for (let index = 0; index < statementNodes.length; index += 1) {
     const statementNode = statementNodes[index];
@@ -172,6 +193,17 @@ const addImplicitRangeOperatorClassDependencies = (
       );
       if (providerRef) {
         rangeOperatorClassRefs.set(objectRefKey(providerRef), providerRef);
+      }
+    }
+    for (const providerNode of statementNodes) {
+      for (const providedRef of providerNode.provides) {
+        const providerRef = defaultBtreeOperatorClassProvidedRefForSubtype(
+          providedRef,
+          effectiveSubtypeRef,
+        );
+        if (providerRef) {
+          rangeOperatorClassRefs.set(objectRefKey(providerRef), providerRef);
+        }
       }
     }
 

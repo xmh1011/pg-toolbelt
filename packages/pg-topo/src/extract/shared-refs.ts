@@ -213,6 +213,22 @@ export const typeFromTypeNameNode = (
   return typeRef;
 };
 
+const typeNameNodeFromArg = (argNode: unknown): unknown => {
+  const argRecord = asRecord(argNode);
+  return asRecord(argRecord?.TypeName) ?? argNode;
+};
+
+const typeSignaturePart = (typeRef: ObjectRef): string =>
+  typeRef.kind === "type" &&
+  typeRef.schema?.toLowerCase() === "pg_catalog" &&
+  typeRef.explicitSchema === true
+    ? `${typeRef.schema}.${typeRef.name}`
+    : isBuiltInObjectRef(typeRef)
+      ? typeRef.name
+      : typeRef.schema
+        ? `${typeRef.schema}.${typeRef.name}`
+        : typeRef.name;
+
 export const relationFromRangeVarNode = (
   rangeVarNode: unknown,
   kind: ObjectRef["kind"] = "table",
@@ -391,13 +407,11 @@ export const parseNamedObjectRef = (
     }
 
     const signatureParts = args.map((argNode) => {
-      const typeRef = typeFromTypeNameNode(argNode);
+      const typeRef = typeFromTypeNameNode(typeNameNodeFromArg(argNode));
       if (!typeRef) {
         return "unknown";
       }
-      return typeRef.schema
-        ? `${typeRef.schema}.${typeRef.name}`
-        : typeRef.name;
+      return typeSignaturePart(typeRef);
     });
 
     return createObjectRefFromAst(

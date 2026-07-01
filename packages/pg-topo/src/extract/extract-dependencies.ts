@@ -670,6 +670,50 @@ const extractGrantDependencies = (
   return { provides, requires };
 };
 
+const accessMethodFromSignature = (signature?: string): string => {
+  const trimmed = signature?.trim();
+  if (!trimmed?.startsWith("(") || !trimmed.endsWith(")")) {
+    return "";
+  }
+  return trimmed.slice(1, -1).split(",")[0]?.trim().toLowerCase() ?? "";
+};
+
+const isUnqualifiedBuiltInOperatorAccessMethodObject = (
+  objectRef: ObjectRef,
+): boolean => {
+  if (
+    objectRef.explicitSchema === true ||
+    objectRef.schema !== DEFAULT_SCHEMA ||
+    (objectRef.kind !== "operator_class" &&
+      objectRef.kind !== "operator_family")
+  ) {
+    return false;
+  }
+
+  const accessMethod = accessMethodFromSignature(objectRef.signature);
+  if (!accessMethod) {
+    return false;
+  }
+
+  if (objectRef.kind === "operator_family") {
+    return (
+      builtInOperatorFamilyNamesForAccessMethod(accessMethod)?.has(
+        objectRef.name.toLowerCase(),
+      ) === true
+    );
+  }
+
+  return (
+    accessMethod === "btree" &&
+    builtInRangeOperatorClassNames.has(objectRef.name.toLowerCase())
+  );
+};
+
+const normalizeNamedObjectRequirement = (objectRef: ObjectRef): ObjectRef =>
+  isUnqualifiedBuiltInOperatorAccessMethodObject(objectRef)
+    ? markOmitIfNoLocalProducerRef(objectRef)
+    : objectRef;
+
 const extractCommentDependencies = (
   statementNode: Record<string, unknown>,
 ): ExtractDependenciesResult => {
@@ -680,7 +724,7 @@ const extractCommentDependencies = (
   const objectRef = parseNamedObjectRef(statementNode.object, objectKind);
   return {
     provides: [],
-    requires: objectRef ? [objectRef] : [],
+    requires: objectRef ? [normalizeNamedObjectRequirement(objectRef)] : [],
   };
 };
 
@@ -692,7 +736,7 @@ const extractAlterOwnerDependencies = (
   if (objectKind) {
     const objectRef = parseNamedObjectRef(statementNode.object, objectKind);
     if (objectRef) {
-      requires.push(objectRef);
+      requires.push(normalizeNamedObjectRequirement(objectRef));
     }
   }
 
@@ -2591,7 +2635,7 @@ const clipPostgresIdentifier = (
   return clipped;
 };
 
-export const defaultMultirangeTypeName = (rangeTypeName: string): string =>
+const defaultMultirangeTypeName = (rangeTypeName: string): string =>
   rangeTypeName.includes("range")
     ? clipPostgresIdentifier(rangeTypeName.replace("range", "multirange"))
     : `${clipPostgresIdentifier(
@@ -2697,17 +2741,37 @@ const operatorFamilySignature = (accessMethod: string): string | undefined => {
     : `(${trimmed})`;
 };
 
+const operatorNoneArgRef = (): ObjectRef =>
+  createObjectRefFromAst("type", "none");
+
+const isOperatorNoneArgRef = (ref: ObjectRef): boolean =>
+  ref.kind === "type" && ref.schema === undefined && ref.name === "none";
+
+const isOperatorNoneArgNode = (argNode: unknown): boolean => {
+  const argRecord = asRecord(argNode);
+  if (argRecord && Object.keys(argRecord).length === 0) {
+    return true;
+  }
+  const typeName = asRecord(asRecord(argNode)?.TypeName);
+  const nameParts = extractNameParts(typeName?.names);
+  return nameParts.length === 1 && nameParts[0]?.toLowerCase() === "none";
+};
+
 const objectWithArgsTypeRefs = (
   objectWithArgs: unknown,
+  options: { preserveOperatorNone?: boolean } = {},
 ): (ObjectRef | null)[] => {
   const objectWithArgsRecord = asRecord(objectWithArgs);
   const args = Array.isArray(objectWithArgsRecord?.objargs)
     ? objectWithArgsRecord.objargs
     : [];
 
-  return args.map((argNode) =>
-    typeFromTypeNameNode(asRecord(argNode)?.TypeName),
-  );
+  return args.map((argNode) => {
+    if (options.preserveOperatorNone && isOperatorNoneArgNode(argNode)) {
+      return operatorNoneArgRef();
+    }
+    return typeFromTypeNameNode(asRecord(argNode)?.TypeName);
+  });
 };
 
 const typeRefsSignature = (
@@ -2722,6 +2786,7 @@ const objectWithArgsRef = (
   kind: ObjectRef["kind"],
   objectWithArgs: unknown,
   defaultArgs: (ObjectRef | null)[] = [],
+  options: { preserveOperatorNone?: boolean } = {},
 ): ObjectRef | null => {
   const objectWithArgsRecord = asRecord(objectWithArgs);
   if (!objectWithArgsRecord) {
@@ -2736,7 +2801,7 @@ const objectWithArgsRef = (
     return null;
   }
 
-  const explicitArgs = objectWithArgsTypeRefs(objectWithArgsRecord);
+  const explicitArgs = objectWithArgsTypeRefs(objectWithArgsRecord, options);
   const args = explicitArgs.length > 0 ? explicitArgs : defaultArgs;
   if (args.length === 0) {
     return baseRef;
@@ -3071,14 +3136,6 @@ export const createExtractionContext = (
       addTypeKey(enumTypeKeys, typeRef);
     } else if (signature === "(range)") {
       addTypeKey(rangeTypeKeys, typeRef);
-      addTypeKey(
-        multirangeTypeKeys,
-        createObjectRefFromAst(
-          "type",
-          defaultMultirangeTypeName(typeRef.name),
-          typeRef.schema,
-        ),
-      );
     } else if (signature === "(multirange)") {
       addTypeKey(multirangeTypeKeys, typeRef);
     }
@@ -4304,9 +4361,11 @@ const extractCreateOperatorClassDependencies = (
     const itemNumber = typeof item.number === "number" ? item.number : -1;
 
     if (item.itemtype === OPCLASS_ITEM_OPERATOR) {
-      const explicitOperatorArgs = objectWithArgsTypeRefs(itemName);
+      const explicitOperatorArgs = objectWithArgsTypeRefs(itemName, {
+        preserveOperatorNone: true,
+      });
       for (const argRef of explicitOperatorArgs) {
-        if (argRef) {
+        if (argRef && !isOperatorNoneArgRef(argRef)) {
           requires.push(argRef);
           addInvalidPgCatalogTypeDiagnostic(
             diagnostics,
@@ -4368,6 +4427,7 @@ const extractCreateOperatorClassDependencies = (
             "operator",
             itemName,
             operatorArgs,
+            { preserveOperatorNone: true },
           );
           if (operatorRef) {
             requires.push(markOmitIfNoLocalProducerRef(operatorRef));
@@ -4376,7 +4436,14 @@ const extractCreateOperatorClassDependencies = (
         continue;
       }
 
-      const operatorRef = objectWithArgsRef("operator", itemName, operatorArgs);
+      const operatorRef = objectWithArgsRef(
+        "operator",
+        itemName,
+        operatorArgs,
+        {
+          preserveOperatorNone: true,
+        },
+      );
       if (operatorRef) {
         requires.push(operatorRef);
         if (isPgCatalogQualifiedName(nameParts)) {

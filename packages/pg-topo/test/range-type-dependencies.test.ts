@@ -5872,7 +5872,7 @@ describe("range type dependencies", () => {
     });
   });
 
-  test("matches external range provider default multirange types in polymorphic opclasses", async () => {
+  test("matches explicit external multirange providers in polymorphic opclasses", async () => {
     const result = await analyzeAndSort(
       [
         "create type app.wrap as range (subtype = app.period_multirange, subtype_opclass = pg_catalog.multirange_ops);",
@@ -5885,6 +5885,12 @@ describe("range type dependencies", () => {
             schema: "app",
             name: "period",
             signature: "(range)",
+          },
+          {
+            kind: "type",
+            schema: "app",
+            name: "period_multirange",
+            signature: "(multirange)",
           },
         ],
       },

@@ -52,15 +52,6 @@ const clipPostgresIdentifier = (
   return clipped;
 };
 
-const defaultMultirangeTypeName = (rangeTypeName: string): string =>
-  rangeTypeName.includes("range")
-    ? clipPostgresIdentifier(rangeTypeName.replace("range", "multirange"))
-    : `${clipPostgresIdentifier(
-        rangeTypeName,
-        POSTGRES_IDENTIFIER_MAX_BYTES -
-          textEncoder.encode("_multirange").length,
-      )}_multirange`;
-
 const generatedArrayTypeName = (typeName: string): string =>
   clipPostgresIdentifier(`_${typeName}`);
 
@@ -441,28 +432,6 @@ export const buildGraph = (
           kind: "type",
           schema: ref.schema,
           name: generatedArrayTypeName(ref.name),
-        });
-      }
-      if (
-        ref.kind === "type" &&
-        ref.signature?.trim().toLowerCase() === "(range)"
-      ) {
-        const multirangeTypeName = defaultMultirangeTypeName(ref.name);
-        addExternalProvider({
-          kind: "type",
-          schema: ref.schema,
-          name: multirangeTypeName,
-          signature: "(multirange)",
-        });
-        addExternalProvider({
-          kind: "type",
-          schema: ref.schema,
-          name: `${multirangeTypeName}[]`,
-        });
-        addExternalProvider({
-          kind: "type",
-          schema: ref.schema,
-          name: generatedArrayTypeName(multirangeTypeName),
         });
       }
     }

@@ -3965,6 +3965,7 @@ describe("expandReplaceDependencies", () => {
         "CREATE INDEX account_statuses_id_idx ON public.account_statuses USING btree (id)",
       comment: "matview id lookup",
       statistics_target: [250],
+      is_clustered: true,
     });
     const changes: Change[] = [
       mockChange({ invalidates: ["column:public.accounts.status"] }),
@@ -4020,6 +4021,26 @@ describe("expandReplaceDependencies", () => {
     expect(
       expanded.changes.some((c) => c instanceof AlterIndexSetStatistics),
     ).toBe(true);
+
+    const sorted = sortChanges(
+      { mainCatalog, branchCatalog },
+      expanded.changes,
+    );
+    const createIndexIdx = sorted.findIndex(
+      (change) =>
+        change instanceof CreateIndex &&
+        change.index.name === "account_statuses_id_idx",
+    );
+    const clusterIdx = sorted.findIndex(
+      (change) => change.constructor.name === "AlterMaterializedViewSetCluster",
+    );
+    const clusterChange = sorted[clusterIdx];
+
+    expect(createIndexIdx).toBeGreaterThanOrEqual(0);
+    expect(clusterIdx).toBeGreaterThan(createIndexIdx);
+    expect(clusterChange?.serialize()).toBe(
+      "ALTER MATERIALIZED VIEW public.account_statuses CLUSTER ON account_statuses_id_idx",
+    );
   });
 
   test("keeps a drop-only dependent trigger when a column is invalidated", async () => {

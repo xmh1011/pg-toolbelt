@@ -303,6 +303,9 @@ for (const pgVersion of POSTGRES_VERSIONS) {
             ALTER INDEX test_schema.user_ages_constant_idx
               ALTER COLUMN 1 SET STATISTICS 250;
 
+            ALTER MATERIALIZED VIEW test_schema.user_ages
+              CLUSTER ON user_ages_constant_idx;
+
             COMMENT ON INDEX test_schema.user_ages_constant_idx
               IS 'user ages matview index';
           `,
@@ -323,6 +326,9 @@ for (const pgVersion of POSTGRES_VERSIONS) {
 
             ALTER INDEX test_schema.user_ages_constant_idx
               ALTER COLUMN 1 SET STATISTICS 250;
+
+            ALTER MATERIALIZED VIEW test_schema.user_ages
+              CLUSTER ON user_ages_constant_idx;
 
             COMMENT ON INDEX test_schema.user_ages_constant_idx
               IS 'user ages matview index';
@@ -356,17 +362,24 @@ for (const pgVersion of POSTGRES_VERSIONS) {
                 "ALTER INDEX test_schema.user_ages_constant_idx ALTER COLUMN 1 SET STATISTICS 250",
               ),
             );
+            const clusterIndexIdx = statements.findIndex((statement) =>
+              statement.includes(
+                "ALTER MATERIALIZED VIEW test_schema.user_ages CLUSTER ON user_ages_constant_idx",
+              ),
+            );
 
             expect(dropMatviewIdx).toBeGreaterThanOrEqual(0);
             expect(alterColumnIdx).toBeGreaterThanOrEqual(0);
             expect(createMatviewIdx).toBeGreaterThanOrEqual(0);
             expect(createIndexIdx).toBeGreaterThanOrEqual(0);
             expect(setStatisticsIdx).toBeGreaterThanOrEqual(0);
+            expect(clusterIndexIdx).toBeGreaterThanOrEqual(0);
             expect(commentIndexIdx).toBeGreaterThanOrEqual(0);
             expect(dropMatviewIdx).toBeLessThan(alterColumnIdx);
             expect(alterColumnIdx).toBeLessThan(createMatviewIdx);
             expect(createMatviewIdx).toBeLessThan(createIndexIdx);
             expect(createIndexIdx).toBeLessThan(setStatisticsIdx);
+            expect(createIndexIdx).toBeLessThan(clusterIndexIdx);
             expect(createIndexIdx).toBeLessThan(commentIndexIdx);
           },
         });

@@ -6,6 +6,7 @@ import {
 } from "../materialized-view.model.ts";
 import {
   AlterMaterializedViewChangeOwner,
+  AlterMaterializedViewSetCluster,
   AlterMaterializedViewSetStorageParams,
 } from "./materialized-view.alter.ts";
 
@@ -124,6 +125,44 @@ describe.concurrent("materialized-view", () => {
           "ALTER MATERIALIZED VIEW public.test_mv RESET (autovacuum_enabled)",
           "ALTER MATERIALIZED VIEW public.test_mv SET (fillfactor=90, user_catalog_table=true)",
         ].join(";\n"),
+      );
+    });
+
+    test("set cluster index", async () => {
+      const materializedView = new MaterializedView({
+        schema: "public",
+        name: "test_mv",
+        definition: "SELECT * FROM test_table",
+        row_security: false,
+        force_row_security: false,
+        has_indexes: true,
+        has_rules: false,
+        has_triggers: false,
+        has_subclasses: false,
+        is_populated: true,
+        replica_identity: "d",
+        is_partition: false,
+        options: null,
+        partition_bound: null,
+        owner: "test",
+        comment: null,
+        columns: [],
+        privileges: [],
+      });
+
+      const change = new AlterMaterializedViewSetCluster({
+        materializedView,
+        indexName: "test_mv_lookup_idx",
+      });
+
+      await assertValidSql(change.serialize());
+
+      expect(change.requires).toEqual([
+        "materializedView:public.test_mv",
+        "index:public.test_mv.test_mv_lookup_idx",
+      ]);
+      expect(change.serialize()).toBe(
+        "ALTER MATERIALIZED VIEW public.test_mv CLUSTER ON test_mv_lookup_idx",
       );
     });
   });

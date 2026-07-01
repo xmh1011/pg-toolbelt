@@ -2916,7 +2916,7 @@ const operatorClassSupportFunctionReturnType = (
     if (supportNumber === 1) {
       return createObjectRefFromAst("type", "int4");
     }
-    if (supportNumber === 2 || supportNumber === 6) {
+    if (supportNumber === 2 || supportNumber === 5 || supportNumber === 6) {
       return createObjectRefFromAst("type", "void");
     }
     if (supportNumber === 3 || supportNumber === 4) {

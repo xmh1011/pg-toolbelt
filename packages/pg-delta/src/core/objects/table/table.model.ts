@@ -447,7 +447,17 @@ select
         'name', quote_ident(a.attname),
         'position', a.attnum,
         'data_type', a.atttypid::regtype::text,
+        'data_type_oid', a.atttypid::oid::text,
         'data_type_str', format_type(a.atttypid, a.atttypmod),
+        'assignment_cast_source_type_oids', coalesce(
+          (
+            select json_agg(pc.castsource::oid::text order by pc.castsource::oid::text)
+            from pg_catalog.pg_cast pc
+            where pc.casttarget = a.atttypid
+              and pc.castcontext in ('a', 'i')
+          ),
+          '[]'::json
+        ),
         'is_custom_type', ty.typnamespace::regnamespace::text not in ('pg_catalog', 'information_schema'),
         'custom_type_type', case when ty.typnamespace::regnamespace::text not in ('pg_catalog', 'information_schema') then ty.typtype else null end,
         'custom_type_category', case when ty.typnamespace::regnamespace::text not in ('pg_catalog', 'information_schema') then ty.typcategory else null end,

@@ -228,6 +228,22 @@ export function expandReplaceDependencies({
     }
   }
 
+  // Aggregate stableIds are also signature-qualified
+  // (`aggregate:schema.name(argtypes)`). When an aggregate argument signature
+  // changes, dependents in the main catalog still reference the old signature
+  // and must be promoted before DROP AGGREGATE runs.
+  const createdAggregateNames = new Set<string>();
+  for (const id of createdIds) {
+    const key = parseAggregateSchemaName(id);
+    if (key) createdAggregateNames.add(key);
+  }
+  for (const id of droppedIds) {
+    const key = parseAggregateSchemaName(id);
+    if (key && createdAggregateNames.has(key)) {
+      replaceRoots.add(id);
+    }
+  }
+
   // Drop-only objects (no matching create — typically a renamed-away table or
   // type) are also expansion roots: anything in main that depends on them via
   // pg_depend must drop before the parent does. Without this seed, a renamed
@@ -1375,6 +1391,13 @@ function parseProcedureSchemaName(stableId: string): string | null {
   const paren = stableId.indexOf("(");
   if (paren === -1) return null;
   return stableId.slice("procedure:".length, paren);
+}
+
+function parseAggregateSchemaName(stableId: string): string | null {
+  if (!stableId.startsWith("aggregate:")) return null;
+  const paren = stableId.indexOf("(");
+  if (paren === -1) return null;
+  return stableId.slice("aggregate:".length, paren);
 }
 
 function isRebuildableInvalidationDependent(dependentId: string): boolean {

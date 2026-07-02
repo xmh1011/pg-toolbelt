@@ -6,7 +6,9 @@ export const columnPropsSchema = z.object({
   name: z.string(),
   position: z.number(),
   data_type: z.string(),
+  data_type_oid: z.string().optional(),
   data_type_str: z.string(),
+  assignment_cast_source_type_oids: z.array(z.string()).optional(),
   is_custom_type: z.boolean(),
   custom_type_type: z.string().nullable(),
   custom_type_category: z.string().nullable(),
@@ -27,7 +29,12 @@ export type ColumnProps = z.infer<typeof columnPropsSchema>;
 export function normalizeColumns(columns: ColumnProps[]) {
   return columns
     .map((column) => {
-      const { position: _position, ...rest } = column;
+      const {
+        position: _position,
+        data_type_oid: _dataTypeOid,
+        assignment_cast_source_type_oids: _assignmentCastSourceTypeOids,
+        ...rest
+      } = column;
       return rest;
     })
     .sort((a, b) => a.name.localeCompare(b.name));

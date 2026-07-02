@@ -57,6 +57,32 @@ import {
 import type { TableChange } from "./changes/table.types.ts";
 import { Table } from "./table.model.ts";
 
+type TableColumn = Table["columns"][number];
+
+function canAlterColumnTypeWithoutUsing(
+  mainCol: TableColumn,
+  branchCol: TableColumn,
+): boolean {
+  if (mainCol.data_type_str === branchCol.data_type_str) {
+    return true;
+  }
+  if (
+    mainCol.data_type_oid &&
+    branchCol.data_type_oid &&
+    mainCol.data_type_oid === branchCol.data_type_oid
+  ) {
+    return true;
+  }
+
+  const assignmentCastSourceTypeOids =
+    branchCol.assignment_cast_source_type_oids;
+  if (!assignmentCastSourceTypeOids || !mainCol.data_type_oid) {
+    return true;
+  }
+
+  return assignmentCastSourceTypeOids.includes(mainCol.data_type_oid);
+}
+
 function createAlterConstraintChange(mainTable: Table, branchTable: Table) {
   const changes: TableChange[] = [];
 
@@ -794,6 +820,8 @@ export function diffTables(
         (columnTypeChanged || columnCollationChanged) &&
         branchCol.is_generated &&
         (ctx.version < 170000 ||
+          (columnTypeChanged &&
+            !canAlterColumnTypeWithoutUsing(mainCol, branchCol)) ||
           mainCol.is_generated !== branchCol.is_generated ||
           mainCol.not_null ||
           branchCol.not_null ||

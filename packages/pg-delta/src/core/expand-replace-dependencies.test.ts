@@ -3997,6 +3997,129 @@ describe("expandReplaceDependencies", () => {
     ).toHaveLength(1);
   });
 
+  test("does not duplicate existing publication table adds when releasing routine filters", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const statusColumn = {
+      name: "status",
+      position: 1,
+      data_type: "text",
+      data_type_str: "text",
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: false,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: false,
+      collation: null,
+      default: null,
+      comment: null,
+    };
+    const accountsTable = makeTable("accounts", [statusColumn]);
+    const auditTable = makeTable("audit_accounts", [statusColumn]);
+    const mainProcedure = makeProcedure({
+      name: "is_active_status",
+      argument_count: 1,
+      argument_types: ["text"],
+      return_type: "boolean",
+      return_type_schema: "pg_catalog",
+      definition:
+        "CREATE FUNCTION public.is_active_status(status text) RETURNS boolean LANGUAGE sql STABLE BEGIN ATOMIC SELECT status = 'active'; END",
+      sql_body: "SELECT status = 'active'",
+    });
+    const branchProcedure = makeProcedure({
+      name: "is_active_status",
+      argument_count: 2,
+      argument_default_count: 0,
+      argument_types: ["text", "text"],
+      return_type: "boolean",
+      return_type_schema: "pg_catalog",
+      definition:
+        "CREATE FUNCTION public.is_active_status(status text, expected text) RETURNS boolean LANGUAGE sql STABLE BEGIN ATOMIC SELECT status = expected; END",
+      sql_body: "SELECT status = expected",
+    });
+    const mainPublication = makePublication({
+      tables: [
+        {
+          schema: "public",
+          name: "accounts",
+          columns: null,
+          row_filter: "public.is_active_status(status)",
+        },
+      ],
+    });
+    const branchPublication = makePublication({
+      tables: [
+        {
+          schema: "public",
+          name: "accounts",
+          columns: null,
+          row_filter: "public.is_active_status(status, 'active'::text)",
+        },
+        {
+          schema: "public",
+          name: "audit_accounts",
+          columns: null,
+          row_filter: "public.is_active_status(status, 'active'::text)",
+        },
+      ],
+    });
+    const auditPublicationTable = branchPublication.tables.find(
+      (table) => table.name === "audit_accounts",
+    );
+    if (!auditPublicationTable) {
+      throw new Error("missing audit_accounts publication table");
+    }
+    const changes: Change[] = [
+      new DropProcedure({ procedure: mainProcedure }),
+      new CreateProcedure({ procedure: branchProcedure }),
+      new AlterPublicationAddTables({
+        publication: branchPublication,
+        tables: [auditPublicationTable],
+      }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      tables: { [accountsTable.stableId]: accountsTable },
+      procedures: { [mainProcedure.stableId]: mainProcedure },
+      publications: { [mainPublication.stableId]: mainPublication },
+      depends: [
+        {
+          dependent_stable_id: mainPublication.stableId,
+          referenced_stable_id: mainProcedure.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      tables: {
+        [accountsTable.stableId]: accountsTable,
+        [auditTable.stableId]: auditTable,
+      },
+      procedures: { [branchProcedure.stableId]: branchProcedure },
+      publications: { [branchPublication.stableId]: branchPublication },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    const addedTableNames = expanded.changes
+      .filter((change) => change instanceof AlterPublicationAddTables)
+      .flatMap((change) => change.tables.map((table) => table.name));
+
+    expect(addedTableNames.filter((name) => name === "accounts")).toHaveLength(
+      1,
+    );
+    expect(
+      addedTableNames.filter((name) => name === "audit_accounts"),
+    ).toHaveLength(1);
+  });
+
   test("replays routine metadata when a column invalidation rebuilds a procedure", async () => {
     const baseline = await createEmptyCatalog(170000, "postgres");
     const procedure = makeProcedure({

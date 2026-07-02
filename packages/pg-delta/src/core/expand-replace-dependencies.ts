@@ -1060,36 +1060,36 @@ function buildPublicationTableReplacementChanges(
     referencedStableId,
     branchPublication,
   );
-  if (mainTables.length === 0 && branchTables.length === 0) return [];
+  const mainTablesToDrop = mainTables.filter(
+    (table) =>
+      !hasPublicationDropTablesChange(existingChanges, publicationStableId, [
+        table,
+      ]),
+  );
+  const branchTablesToAdd = branchTables.filter(
+    (table) =>
+      !hasPublicationAddTablesChange(existingChanges, publicationStableId, [
+        table,
+      ]),
+  );
+  if (mainTablesToDrop.length === 0 && branchTablesToAdd.length === 0) {
+    return [];
+  }
 
   const replacementChanges: Change[] = [];
-  if (
-    mainTables.length > 0 &&
-    !hasPublicationDropTablesChange(
-      existingChanges,
-      publicationStableId,
-      mainTables,
-    )
-  ) {
+  if (mainTablesToDrop.length > 0) {
     replacementChanges.push(
       new AlterPublicationDropTables({
         publication: mainPublication,
-        tables: mainTables,
+        tables: mainTablesToDrop,
       }),
     );
   }
-  if (
-    branchTables.length > 0 &&
-    !hasPublicationAddTablesChange(
-      existingChanges,
-      publicationStableId,
-      branchTables,
-    )
-  ) {
+  if (branchTablesToAdd.length > 0) {
     replacementChanges.push(
       new AlterPublicationAddTables({
         publication: branchPublication,
-        tables: branchTables,
+        tables: branchTablesToAdd,
       }),
     );
   }

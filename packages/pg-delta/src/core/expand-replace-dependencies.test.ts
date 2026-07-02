@@ -16,6 +16,8 @@ import {
   AlterDomainDropDefault,
   AlterDomainSetDefault,
 } from "./objects/domain/changes/domain.alter.ts";
+import { CreateDomain } from "./objects/domain/changes/domain.create.ts";
+import { DropDomain } from "./objects/domain/changes/domain.drop.ts";
 import { Domain } from "./objects/domain/domain.model.ts";
 import { AlterIndexSetStatistics } from "./objects/index/changes/index.alter.ts";
 import { CreateCommentOnIndex } from "./objects/index/changes/index.comment.ts";
@@ -1160,7 +1162,7 @@ describe("expandReplaceDependencies", () => {
         },
       ],
     });
-    const columnId = "column:public.accounts.status_label";
+    const columnId = stableId.column("public", "accounts", "status_label");
     const changes: Change[] = [
       new AlterTableDropColumn({
         table: mainTable,
@@ -1250,6 +1252,92 @@ describe("expandReplaceDependencies", () => {
       expanded.changes.some(
         (change) => change instanceof CreateCommentOnConstraint,
       ),
+    ).toBe(true);
+  });
+
+  test("restores generated column metadata when a regular column is rebuilt as generated", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const baseColumn = {
+      name: "status",
+      position: 1,
+      data_type: "text",
+      data_type_str: "text",
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: true,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: false,
+      collation: null,
+      default: null,
+      comment: null,
+    };
+    const regularColumn = {
+      ...baseColumn,
+      name: "status_label",
+      position: 2,
+      not_null: false,
+      comment: "status label",
+      security_labels: [{ provider: "dummy", label: "classified" }],
+    };
+    const generatedColumn = {
+      ...regularColumn,
+      is_generated: true,
+      default: "upper(status)",
+    };
+    const mainTable = makeTable("accounts", [baseColumn, regularColumn], {
+      privileges: [
+        {
+          grantee: "generated_reader",
+          privilege: "SELECT",
+          grantable: false,
+          columns: ["status_label"],
+        },
+      ],
+    });
+    const branchTable = makeTable("accounts", [baseColumn, generatedColumn], {
+      privileges: mainTable.privileges,
+    });
+    const changes: Change[] = [
+      new AlterTableDropColumn({
+        table: mainTable,
+        column: regularColumn,
+      }),
+      new AlterTableAddColumn({
+        table: branchTable,
+        column: generatedColumn,
+      }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      tables: { [mainTable.stableId]: mainTable },
+      depends: [],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      tables: { [branchTable.stableId]: branchTable },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    expect(
+      expanded.changes.some(
+        (change) => change instanceof CreateCommentOnColumn,
+      ),
+    ).toBe(true);
+    expect(
+      expanded.changes.some(
+        (change) => change instanceof CreateSecurityLabelOnColumn,
+      ),
+    ).toBe(true);
+    expect(
+      expanded.changes.some((change) => change instanceof GrantTablePrivileges),
     ).toBe(true);
   });
 
@@ -3659,6 +3747,253 @@ describe("expandReplaceDependencies", () => {
     ).toHaveLength(1);
     expect(
       expanded.changes.filter((c) => c instanceof AlterDomainSetDefault),
+    ).toHaveLength(1);
+  });
+
+  test("drops and re-adds column defaults that depend on replaced routine signatures", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const defaultedColumn = {
+      name: "label",
+      position: 1,
+      data_type: "text",
+      data_type_str: "text",
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: false,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: false,
+      collation: null,
+      default: "public.account_status_text()",
+      comment: null,
+    };
+    const branchDefaultedColumn = {
+      ...defaultedColumn,
+      default: "public.account_status_text(1)",
+    };
+    const mainAudit = makeTable("account_audit", [defaultedColumn]);
+    const branchAudit = makeTable("account_audit", [branchDefaultedColumn]);
+    const mainProcedure = makeProcedure();
+    const branchProcedure = makeProcedure({
+      argument_count: 1,
+      argument_default_count: 0,
+      argument_types: ["integer"],
+      definition:
+        "CREATE FUNCTION public.account_status_text(fallback integer) RETURNS text LANGUAGE sql STABLE BEGIN ATOMIC SELECT fallback::text; END",
+      sql_body: "SELECT fallback::text",
+    });
+    const changes: Change[] = [
+      new DropProcedure({ procedure: mainProcedure }),
+      new CreateProcedure({ procedure: branchProcedure }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      tables: { [mainAudit.stableId]: mainAudit },
+      procedures: { [mainProcedure.stableId]: mainProcedure },
+      depends: [
+        {
+          dependent_stable_id: "column:public.account_audit.label",
+          referenced_stable_id: mainProcedure.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      tables: { [branchAudit.stableId]: branchAudit },
+      procedures: { [branchProcedure.stableId]: branchProcedure },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    expect(
+      expanded.changes.filter(
+        (change) => change instanceof AlterTableAlterColumnDropDefault,
+      ),
+    ).toHaveLength(1);
+    expect(
+      expanded.changes.filter(
+        (change) => change instanceof AlterTableAlterColumnSetDefault,
+      ),
+    ).toHaveLength(1);
+    expect(expanded.changes.some((change) => change instanceof DropTable)).toBe(
+      false,
+    );
+    expect(
+      expanded.changes.some((change) => change instanceof CreateTable),
+    ).toBe(false);
+  });
+
+  test("drops and restores domain defaults that depend on replaced routine signatures", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const mainProcedure = makeProcedure();
+    const branchProcedure = makeProcedure({
+      argument_count: 1,
+      argument_default_count: 0,
+      argument_types: ["integer"],
+      definition:
+        "CREATE FUNCTION public.account_status_text(fallback integer) RETURNS text LANGUAGE sql STABLE BEGIN ATOMIC SELECT fallback::text; END",
+      sql_body: "SELECT fallback::text",
+    });
+    const mainDomain = makeDomain({
+      default_bin: "public.account_status_text()",
+      default_value: "public.account_status_text()",
+    });
+    const branchDomain = makeDomain({
+      default_bin: "public.account_status_text(1)",
+      default_value: "public.account_status_text(1)",
+    });
+    const changes: Change[] = [
+      new DropProcedure({ procedure: mainProcedure }),
+      new CreateProcedure({ procedure: branchProcedure }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      domains: { [mainDomain.stableId]: mainDomain },
+      procedures: { [mainProcedure.stableId]: mainProcedure },
+      depends: [
+        {
+          dependent_stable_id: mainDomain.stableId,
+          referenced_stable_id: mainProcedure.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      domains: { [branchDomain.stableId]: branchDomain },
+      procedures: { [branchProcedure.stableId]: branchProcedure },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    expect(
+      expanded.changes.filter(
+        (change) => change instanceof AlterDomainDropDefault,
+      ),
+    ).toHaveLength(1);
+    expect(
+      expanded.changes.filter(
+        (change) => change instanceof AlterDomainSetDefault,
+      ),
+    ).toHaveLength(1);
+    expect(
+      expanded.changes.some((change) => change instanceof DropDomain),
+    ).toBe(false);
+    expect(
+      expanded.changes.some((change) => change instanceof CreateDomain),
+    ).toBe(false);
+  });
+
+  test("drops and restores publication table filters that depend on replaced routine signatures", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const statusColumn = {
+      name: "status",
+      position: 1,
+      data_type: "text",
+      data_type_str: "text",
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: false,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: false,
+      collation: null,
+      default: null,
+      comment: null,
+    };
+    const table = makeTable("accounts", [statusColumn]);
+    const mainProcedure = makeProcedure({
+      name: "is_active_status",
+      argument_count: 1,
+      argument_types: ["text"],
+      return_type: "boolean",
+      return_type_schema: "pg_catalog",
+      definition:
+        "CREATE FUNCTION public.is_active_status(status text) RETURNS boolean LANGUAGE sql STABLE BEGIN ATOMIC SELECT status = 'active'; END",
+      sql_body: "SELECT status = 'active'",
+    });
+    const branchProcedure = makeProcedure({
+      name: "is_active_status",
+      argument_count: 2,
+      argument_default_count: 0,
+      argument_types: ["text", "text"],
+      return_type: "boolean",
+      return_type_schema: "pg_catalog",
+      definition:
+        "CREATE FUNCTION public.is_active_status(status text, expected text) RETURNS boolean LANGUAGE sql STABLE BEGIN ATOMIC SELECT status = expected; END",
+      sql_body: "SELECT status = expected",
+    });
+    const mainPublication = makePublication({
+      tables: [
+        {
+          schema: "public",
+          name: "accounts",
+          columns: null,
+          row_filter: "public.is_active_status(status)",
+        },
+      ],
+    });
+    const branchPublication = makePublication({
+      tables: [
+        {
+          schema: "public",
+          name: "accounts",
+          columns: null,
+          row_filter: "public.is_active_status(status, 'active'::text)",
+        },
+      ],
+    });
+    const changes: Change[] = [
+      new DropProcedure({ procedure: mainProcedure }),
+      new CreateProcedure({ procedure: branchProcedure }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      tables: { [table.stableId]: table },
+      procedures: { [mainProcedure.stableId]: mainProcedure },
+      publications: { [mainPublication.stableId]: mainPublication },
+      depends: [
+        {
+          dependent_stable_id: mainPublication.stableId,
+          referenced_stable_id: mainProcedure.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      tables: { [table.stableId]: table },
+      procedures: { [branchProcedure.stableId]: branchProcedure },
+      publications: { [branchPublication.stableId]: branchPublication },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    expect(
+      expanded.changes.filter(
+        (change) => change instanceof AlterPublicationDropTables,
+      ),
+    ).toHaveLength(1);
+    expect(
+      expanded.changes.filter(
+        (change) => change instanceof AlterPublicationAddTables,
+      ),
     ).toHaveLength(1);
   });
 

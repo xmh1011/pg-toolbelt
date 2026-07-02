@@ -249,6 +249,62 @@ for (const pgVersion of POSTGRES_VERSIONS) {
       }),
     );
 
+    test(
+      "regular column rebuilt as generated restores column metadata",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: dedent`
+            CREATE SCHEMA generated_metadata;
+            DO $$
+            BEGIN
+              CREATE ROLE generated_metadata_reader;
+            EXCEPTION WHEN duplicate_object THEN
+              NULL;
+            END $$;
+            CREATE TABLE generated_metadata.accounts (
+              id integer PRIMARY KEY,
+              status text NOT NULL,
+              status_label text
+            );
+            COMMENT ON COLUMN generated_metadata.accounts.status_label IS 'status label';
+            GRANT SELECT (status_label)
+              ON TABLE generated_metadata.accounts
+              TO generated_metadata_reader;
+          `,
+          testSql: dedent`
+            ALTER TABLE generated_metadata.accounts DROP COLUMN status_label;
+            ALTER TABLE generated_metadata.accounts
+              ADD COLUMN status_label text GENERATED ALWAYS AS (upper(status)) STORED;
+            COMMENT ON COLUMN generated_metadata.accounts.status_label IS 'status label';
+            GRANT SELECT (status_label)
+              ON TABLE generated_metadata.accounts
+              TO generated_metadata_reader;
+          `,
+          assertSqlStatements: (statements) => {
+            const addColumnIndex = statements.findIndex((statement) =>
+              statement.startsWith(
+                "ALTER TABLE generated_metadata.accounts ADD COLUMN status_label text GENERATED ALWAYS AS",
+              ),
+            );
+            const commentIndex = statements.indexOf(
+              "COMMENT ON COLUMN generated_metadata.accounts.status_label IS 'status label'",
+            );
+            const grantIndex = statements.findIndex((statement) =>
+              statement.startsWith(
+                "GRANT SELECT (status_label) ON generated_metadata.accounts TO generated_metadata_reader",
+              ),
+            );
+
+            expect(addColumnIndex).toBeGreaterThanOrEqual(0);
+            expect(commentIndex).toBeGreaterThan(addColumnIndex);
+            expect(grantIndex).toBeGreaterThan(addColumnIndex);
+          },
+        });
+      }),
+    );
+
     test.skipIf(pgVersion < 17)(
       "postgres 17 generated column type change rebuilds constrained columns",
       withDb(pgVersion, async (db) => {

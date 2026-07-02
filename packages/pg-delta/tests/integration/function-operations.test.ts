@@ -467,6 +467,82 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test(
+      "domain default depending on replaced function signature is restored around the function",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: dedent`
+            CREATE SCHEMA test_schema;
+
+            CREATE FUNCTION test_schema.default_status()
+            RETURNS text
+            LANGUAGE sql
+            IMMUTABLE
+            AS $$ SELECT 'active'::text $$;
+
+            CREATE DOMAIN test_schema.status_label AS text
+              DEFAULT test_schema.default_status();
+
+            CREATE TABLE test_schema.accounts (
+              id integer PRIMARY KEY,
+              status test_schema.status_label NOT NULL
+            );
+          `,
+          testSql: dedent`
+            ALTER DOMAIN test_schema.status_label DROP DEFAULT;
+
+            DROP FUNCTION test_schema.default_status();
+
+            CREATE FUNCTION test_schema.default_status(fallback text DEFAULT 'active')
+            RETURNS text
+            LANGUAGE sql
+            IMMUTABLE
+            AS $$ SELECT fallback $$;
+
+            ALTER DOMAIN test_schema.status_label
+              SET DEFAULT test_schema.default_status();
+          `,
+          assertSqlStatements: (statements) => {
+            const domainDropDefaultIndex = statements.indexOf(
+              "ALTER DOMAIN test_schema.status_label DROP DEFAULT",
+            );
+            const domainFunctionDropIndex = statements.indexOf(
+              "DROP FUNCTION test_schema.default_status()",
+            );
+            const domainFunctionCreateIndex = statements.findIndex(
+              (statement) =>
+                statement.startsWith(
+                  "CREATE FUNCTION test_schema.default_status(",
+                ),
+            );
+            const domainSetDefaultIndex = statements.findIndex((statement) =>
+              statement.startsWith(
+                "ALTER DOMAIN test_schema.status_label SET DEFAULT test_schema.default_status",
+              ),
+            );
+
+            expect(domainDropDefaultIndex).toBeGreaterThanOrEqual(0);
+            expect(domainFunctionDropIndex).toBeGreaterThan(
+              domainDropDefaultIndex,
+            );
+            expect(domainFunctionCreateIndex).toBeGreaterThan(
+              domainFunctionDropIndex,
+            );
+            expect(domainSetDefaultIndex).toBeGreaterThan(
+              domainFunctionCreateIndex,
+            );
+            expect(
+              statements.some((statement) =>
+                statement.startsWith("DROP DOMAIN test_schema.status_label"),
+              ),
+            ).toBe(false);
+          },
+        });
+      }),
+    );
+
+    test(
       "function signature: parameter type change",
       withDb(pgVersion, async (db) => {
         // Changes the IN parameter type (text -> uuid). stableId changes

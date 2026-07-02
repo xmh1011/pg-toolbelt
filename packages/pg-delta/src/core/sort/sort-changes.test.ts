@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { Catalog, createEmptyCatalog } from "../catalog.model.ts";
 import type { Change } from "../change.types.ts";
 import type { PgDepend } from "../depend.ts";
+import { AlterDomainDropDefault } from "../objects/domain/changes/domain.alter.ts";
+import { Domain } from "../objects/domain/domain.model.ts";
 import { CreateProcedure } from "../objects/procedure/changes/procedure.create.ts";
 import { DropProcedure } from "../objects/procedure/changes/procedure.drop.ts";
 import { Procedure } from "../objects/procedure/procedure.model.ts";
@@ -251,6 +253,9 @@ async function catalogWithDepends(depends: PgDepend[]) {
 }
 
 function changeLabel(change: Change) {
+  if (change instanceof AlterDomainDropDefault) {
+    return `${change.constructor.name}:${change.domain.name}`;
+  }
   if (change instanceof CreateEnum) {
     return `${change.constructor.name}:${change.enum.stableId}`;
   }
@@ -356,6 +361,47 @@ describe("sortChanges", () => {
     expect(sorted.map(changeLabel)).toEqual([
       "AlterTableAlterColumnDropDefault:accounts.status_code",
       "AlterTableAlterColumnType:accounts.status_code",
+    ]);
+  });
+
+  test("orders domain default drop before dropping the referenced routine", async () => {
+    const domain = new Domain({
+      schema: "public",
+      name: "account_label",
+      base_type: "text",
+      base_type_schema: "pg_catalog",
+      base_type_str: "text",
+      not_null: false,
+      type_modifier: null,
+      array_dimensions: null,
+      collation: null,
+      default_bin: "public.account_status()",
+      default_value: "public.account_status()",
+      owner: "postgres",
+      comment: null,
+      constraints: [],
+      privileges: [],
+      security_labels: [],
+    });
+    const procedure = procedureReturningType("text");
+    const changes: Change[] = [
+      new DropProcedure({ procedure }),
+      new AlterDomainDropDefault({ domain }),
+    ];
+    const mainCatalog = await catalogWithDepends([
+      {
+        dependent_stable_id: domain.stableId,
+        referenced_stable_id: procedure.stableId,
+        deptype: "n",
+      },
+    ]);
+    const branchCatalog = await catalogWithDepends([]);
+
+    const sorted = sortChanges({ mainCatalog, branchCatalog }, changes);
+
+    expect(sorted.map(changeLabel)).toEqual([
+      "AlterDomainDropDefault:account_label",
+      `DropProcedure:${procedure.stableId}`,
     ]);
   });
 

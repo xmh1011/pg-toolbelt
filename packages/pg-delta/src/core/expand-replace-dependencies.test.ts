@@ -10,6 +10,13 @@ import { GrantAggregatePrivileges } from "./objects/aggregate/changes/aggregate.
 import { CreateSecurityLabelOnAggregate } from "./objects/aggregate/changes/aggregate.security-label.ts";
 import { Aggregate } from "./objects/aggregate/aggregate.model.ts";
 import { DefaultPrivilegeState } from "./objects/base.default-privileges.ts";
+import {
+  AlterDomainAddConstraint,
+  AlterDomainDropConstraint,
+  AlterDomainDropDefault,
+  AlterDomainSetDefault,
+} from "./objects/domain/changes/domain.alter.ts";
+import { Domain } from "./objects/domain/domain.model.ts";
 import { AlterIndexSetStatistics } from "./objects/index/changes/index.alter.ts";
 import { CreateCommentOnIndex } from "./objects/index/changes/index.comment.ts";
 import { CreateIndex } from "./objects/index/changes/index.create.ts";
@@ -312,6 +319,30 @@ function makeAggregate(
     argument_defaults: null,
     owner: "postgres",
     comment: null,
+    privileges: [],
+    security_labels: [],
+    ...overrides,
+  });
+}
+
+function makeDomain(
+  overrides: Partial<ConstructorParameters<typeof Domain>[0]> = {},
+): Domain {
+  return new Domain({
+    schema: "public",
+    name: "account_label",
+    base_type: "text",
+    base_type_schema: "pg_catalog",
+    base_type_str: "text",
+    not_null: false,
+    type_modifier: null,
+    array_dimensions: null,
+    collation: null,
+    default_bin: null,
+    default_value: null,
+    owner: "postgres",
+    comment: null,
+    constraints: [],
     privileges: [],
     security_labels: [],
     ...overrides,
@@ -3398,6 +3429,78 @@ describe("expandReplaceDependencies", () => {
     ).toBe(true);
   });
 
+  test("drops domain constraints that depend on routines rebuilt from column invalidation", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const procedure = makeProcedure({
+      name: "account_label_is_valid",
+      argument_types: ["text"],
+      argument_count: 1,
+      return_type: "boolean",
+      return_type_schema: "pg_catalog",
+      source_code: "",
+      sql_body: "SELECT status::text = value FROM public.accounts WHERE id = 1",
+      definition:
+        "CREATE FUNCTION public.account_label_is_valid(value text) RETURNS boolean LANGUAGE sql STABLE BEGIN ATOMIC SELECT status::text = value FROM public.accounts WHERE id = 1; END",
+    });
+    const domainConstraint = {
+      name: "account_label_check",
+      validated: true,
+      is_local: true,
+      no_inherit: false,
+      check_expression: "public.account_label_is_valid(VALUE)",
+    };
+    const domain = makeDomain({
+      name: "account_label",
+      constraints: [domainConstraint],
+    });
+    const changes: Change[] = [
+      mockChange({ invalidates: ["column:public.accounts.status"] }),
+    ];
+    const constraintStableId = stableId.constraint(
+      domain.schema,
+      domain.name,
+      domainConstraint.name,
+    );
+    const mainCatalog = catalogWith(baseline, {
+      domains: { [domain.stableId]: domain },
+      procedures: { [procedure.stableId]: procedure },
+      depends: [
+        {
+          dependent_stable_id: procedure.stableId,
+          referenced_stable_id: "column:public.accounts.status",
+          deptype: "n",
+        },
+        {
+          dependent_stable_id: constraintStableId,
+          referenced_stable_id: procedure.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      domains: { [domain.stableId]: domain },
+      procedures: { [procedure.stableId]: procedure },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    expect(expanded.changes.some((c) => c instanceof DropProcedure)).toBe(true);
+    expect(expanded.changes.some((c) => c instanceof CreateProcedure)).toBe(
+      true,
+    );
+    expect(
+      expanded.changes.filter((c) => c instanceof AlterDomainDropConstraint),
+    ).toHaveLength(1);
+    expect(
+      expanded.changes.filter((c) => c instanceof AlterDomainAddConstraint),
+    ).toHaveLength(1);
+  });
+
   test("drops and re-adds column defaults that depend on invalidated routines", async () => {
     const baseline = await createEmptyCatalog(170000, "postgres");
     const statusTextColumn = {
@@ -3507,6 +3610,56 @@ describe("expandReplaceDependencies", () => {
     expect(expanded.changes.some((c) => c instanceof CreateProcedure)).toBe(
       true,
     );
+  });
+
+  test("drops and restores domain defaults that depend on invalidated routines", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const procedure = makeProcedure();
+    const domain = makeDomain({
+      default_bin: "public.account_status_text()",
+      default_value: "public.account_status_text()",
+    });
+    const changes: Change[] = [
+      mockChange({ invalidates: ["column:public.accounts.status"] }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      domains: { [domain.stableId]: domain },
+      procedures: { [procedure.stableId]: procedure },
+      depends: [
+        {
+          dependent_stable_id: procedure.stableId,
+          referenced_stable_id: "column:public.accounts.status",
+          deptype: "n",
+        },
+        {
+          dependent_stable_id: domain.stableId,
+          referenced_stable_id: procedure.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      domains: { [domain.stableId]: domain },
+      procedures: { [procedure.stableId]: procedure },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+
+    expect(expanded.changes.some((c) => c instanceof DropProcedure)).toBe(true);
+    expect(expanded.changes.some((c) => c instanceof CreateProcedure)).toBe(
+      true,
+    );
+    expect(
+      expanded.changes.filter((c) => c instanceof AlterDomainDropDefault),
+    ).toHaveLength(1);
+    expect(
+      expanded.changes.filter((c) => c instanceof AlterDomainSetDefault),
+    ).toHaveLength(1);
   });
 
   test("replays routine metadata when a column invalidation rebuilds a procedure", async () => {

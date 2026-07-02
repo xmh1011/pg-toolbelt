@@ -1326,6 +1326,66 @@ describe.concurrent("table.diff", () => {
     ).toBe(false);
   });
 
+  test("postgres 17 rebuilds generated columns when a domain type can reject NULL resets", () => {
+    const pg17Context = {
+      ...testContext,
+      version: 170000,
+    };
+    const generatedTextColumn = {
+      name: "status_label",
+      position: 1,
+      data_type: "text",
+      data_type_str: "text",
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: false,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: true,
+      collation: null,
+      default: "status::text",
+      comment: null,
+    };
+    const generatedDomainColumn = {
+      ...generatedTextColumn,
+      data_type: "nonempty_text",
+      data_type_str: "public.nonempty_text",
+      is_custom_type: true,
+      custom_type_type: "d" as const,
+      custom_type_category: "S",
+      custom_type_schema: "public",
+      custom_type_name: "nonempty_text",
+      default: "status::public.nonempty_text",
+    };
+    const mainTable = new Table({
+      ...base,
+      name: "t_generated_domain_type",
+      columns: [generatedTextColumn],
+    });
+    const branchTable = new Table({
+      ...base,
+      name: "t_generated_domain_type",
+      columns: [generatedDomainColumn],
+    });
+
+    const changes = diffTables(
+      pg17Context,
+      { [mainTable.stableId]: mainTable },
+      { [branchTable.stableId]: branchTable },
+    );
+
+    expect(changes.map((change) => change.serialize())).toEqual([
+      "ALTER TABLE public.t_generated_domain_type DROP COLUMN status_label",
+      "ALTER TABLE public.t_generated_domain_type ADD COLUMN status_label public.nonempty_text GENERATED ALWAYS AS (status::public.nonempty_text) STORED",
+    ]);
+    expect(
+      changes.some((change) => change instanceof AlterTableAlterColumnType),
+    ).toBe(false);
+  });
+
   test("identity transitions emit drop/add/set-generated changes", () => {
     const serialColumn = {
       name: "id",

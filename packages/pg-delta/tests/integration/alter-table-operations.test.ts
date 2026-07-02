@@ -727,6 +727,47 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test.skipIf(pgVersion < 17)(
+      "postgres 17 rebuilds generated columns when a domain type rejects NULL resets",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+          CREATE SCHEMA test_schema;
+          CREATE DOMAIN test_schema.nonempty_text AS text NOT NULL;
+          CREATE TABLE test_schema.generated_domain_type (
+            status text NOT NULL,
+            status_label text GENERATED ALWAYS AS (status::text) STORED
+          );
+
+          INSERT INTO test_schema.generated_domain_type (status)
+          VALUES ('active');
+        `,
+          testSql: `
+          ALTER TABLE test_schema.generated_domain_type
+            DROP COLUMN status_label;
+          ALTER TABLE test_schema.generated_domain_type
+            ADD COLUMN status_label test_schema.nonempty_text
+              GENERATED ALWAYS AS (status::test_schema.nonempty_text) STORED;
+        `,
+          assertSqlStatements: (sqlStatements) => {
+            expect(sqlStatements).toContain(
+              "ALTER TABLE test_schema.generated_domain_type DROP COLUMN status_label",
+            );
+            expect(sqlStatements).toContain(
+              "ALTER TABLE test_schema.generated_domain_type ADD COLUMN status_label test_schema.nonempty_text GENERATED ALWAYS AS ((status)::test_schema.nonempty_text) STORED",
+            );
+            expect(
+              sqlStatements.some((statement) =>
+                statement.includes("ALTER COLUMN status_label TYPE"),
+              ),
+            ).toBe(false);
+          },
+        });
+      }),
+    );
+
+    test.skipIf(pgVersion < 17)(
       "postgres 17 drops generated column indexes before resetting incompatible expressions",
       withDb(pgVersion, async (db) => {
         await roundtripFidelityTest({

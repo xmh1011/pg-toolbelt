@@ -752,6 +752,105 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test(
+      "domain check and default release invalidated routine dependencies",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: dedent`
+            CREATE SCHEMA test_schema;
+            CREATE TABLE test_schema.accounts (
+              id integer PRIMARY KEY,
+              status text NOT NULL
+            );
+
+            CREATE FUNCTION test_schema.account_status_text()
+            RETURNS text
+            LANGUAGE sql
+            STABLE
+            BEGIN ATOMIC
+              SELECT status::text FROM test_schema.accounts WHERE id = 1;
+            END;
+
+            CREATE DOMAIN test_schema.account_label AS text
+              DEFAULT test_schema.account_status_text()
+              CONSTRAINT account_label_check
+              CHECK (VALUE IS DISTINCT FROM test_schema.account_status_text());
+          `,
+          testSql: dedent`
+            ALTER DOMAIN test_schema.account_label
+              DROP DEFAULT;
+            ALTER DOMAIN test_schema.account_label
+              DROP CONSTRAINT account_label_check;
+
+            DROP FUNCTION test_schema.account_status_text();
+
+            ALTER TABLE test_schema.accounts
+              ALTER COLUMN status TYPE character varying(32);
+
+            CREATE FUNCTION test_schema.account_status_text()
+            RETURNS text
+            LANGUAGE sql
+            STABLE
+            BEGIN ATOMIC
+              SELECT status::text FROM test_schema.accounts WHERE id = 1;
+            END;
+
+            ALTER DOMAIN test_schema.account_label
+              ADD CONSTRAINT account_label_check
+              CHECK (VALUE IS DISTINCT FROM test_schema.account_status_text());
+            ALTER DOMAIN test_schema.account_label
+              SET DEFAULT test_schema.account_status_text();
+          `,
+          assertSqlStatements: (statements) => {
+            const dropDefaultIdx = statements.indexOf(
+              "ALTER DOMAIN test_schema.account_label DROP DEFAULT",
+            );
+            const dropConstraintIdx = statements.indexOf(
+              "ALTER DOMAIN test_schema.account_label DROP CONSTRAINT account_label_check",
+            );
+            const dropFunctionIdx = statements.findIndex((statement) =>
+              statement.startsWith(
+                "DROP FUNCTION test_schema.account_status_text(",
+              ),
+            );
+            const alterColumnIdx = statements.findIndex((statement) =>
+              statement.includes(
+                "ALTER TABLE test_schema.accounts ALTER COLUMN status TYPE character varying(32)",
+              ),
+            );
+            const createFunctionIdx = statements.findIndex(
+              (statement) =>
+                statement.startsWith(
+                  "CREATE OR REPLACE FUNCTION test_schema.account_status_text()",
+                ) ||
+                statement.startsWith(
+                  "CREATE FUNCTION test_schema.account_status_text()",
+                ),
+            );
+            const addConstraintIdx = statements.findIndex((statement) =>
+              statement.includes(
+                "ALTER DOMAIN test_schema.account_label ADD CONSTRAINT account_label_check",
+              ),
+            );
+            const setDefaultIdx = statements.indexOf(
+              "ALTER DOMAIN test_schema.account_label SET DEFAULT test_schema.account_status_text()",
+            );
+
+            expect(dropDefaultIdx).toBeGreaterThanOrEqual(0);
+            expect(dropConstraintIdx).toBeGreaterThanOrEqual(0);
+            expect(dropFunctionIdx).toBeGreaterThan(dropDefaultIdx);
+            expect(dropFunctionIdx).toBeGreaterThan(dropConstraintIdx);
+            expect(alterColumnIdx).toBeGreaterThan(dropFunctionIdx);
+            expect(createFunctionIdx).toBeGreaterThan(alterColumnIdx);
+            expect(addConstraintIdx).toBeGreaterThan(createFunctionIdx);
+            expect(setDefaultIdx).toBeGreaterThan(createFunctionIdx);
+          },
+        });
+      }),
+    );
+
+    test(
       "function overloading",
       withDb(pgVersion, async (db) => {
         await roundtripFidelityTest({

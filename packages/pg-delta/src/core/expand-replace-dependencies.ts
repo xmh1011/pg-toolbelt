@@ -320,6 +320,8 @@ export function expandReplaceDependencies({
   while (queue.length > 0) {
     const refId = queue.shift() as string;
     const reachedFromInvalidation = refsReachedFromInvalidation.has(refId);
+    const shouldReleaseExpressionDependents =
+      reachedFromInvalidation || refId.startsWith("procedure:");
     if (
       columnReplaceRoots.has(refId) &&
       !restoredGeneratedColumnDependents.has(refId) &&
@@ -350,7 +352,10 @@ export function expandReplaceDependencies({
         continue;
       }
 
-      if (reachedFromInvalidation && dependentRaw.startsWith("column:")) {
+      if (
+        shouldReleaseExpressionDependents &&
+        dependentRaw.startsWith("column:")
+      ) {
         const replacementChanges = buildColumnDefaultReplacementChanges(
           dependentRaw,
           mainCatalog,
@@ -374,19 +379,26 @@ export function expandReplaceDependencies({
             queue.push(dependentRaw);
           }
         }
+        if (replacementChanges.length > 0) continue;
       }
-      if (reachedFromInvalidation && dependentRaw.startsWith("publication:")) {
-        additions.push(
-          ...buildPublicationTableReplacementChanges(
-            refId,
-            dependentRaw,
-            mainCatalog,
-            branchCatalog,
-            [...changes, ...additions],
-          ),
+      if (
+        shouldReleaseExpressionDependents &&
+        dependentRaw.startsWith("publication:")
+      ) {
+        const replacementChanges = buildPublicationTableReplacementChanges(
+          refId,
+          dependentRaw,
+          mainCatalog,
+          branchCatalog,
+          [...changes, ...additions],
         );
+        additions.push(...replacementChanges);
+        if (replacementChanges.length > 0) continue;
       }
-      if (reachedFromInvalidation && dependentRaw.startsWith("domain:")) {
+      if (
+        shouldReleaseExpressionDependents &&
+        dependentRaw.startsWith("domain:")
+      ) {
         const replacementChanges = buildDomainDefaultReplacementChanges(
           dependentRaw,
           mainCatalog,
@@ -395,6 +407,7 @@ export function expandReplaceDependencies({
         );
         additions.push(...replacementChanges);
         trackChangeIds(replacementChanges, createdIds, droppedIds);
+        if (replacementChanges.length > 0) continue;
       }
       const isColumnReplacementRoot =
         refId.startsWith("column:") &&
@@ -755,10 +768,7 @@ function isGeneratedColumnReplacementTarget(
   );
   if (!mainColumn || !branchColumn) return false;
 
-  return Boolean(
-    mainColumn.default !== null &&
-    (mainColumn.is_generated || branchColumn.is_generated),
-  );
+  return mainColumn.is_generated || branchColumn.is_generated;
 }
 
 function hasColumnDropChange(
@@ -1032,24 +1042,24 @@ function sameStringSet(
 }
 
 function buildPublicationTableReplacementChanges(
-  invalidatedStableId: string,
+  referencedStableId: string,
   publicationStableId: string,
   mainCatalog: Catalog,
   branchCatalog: Catalog,
   existingChanges: readonly Change[],
 ): Change[] {
-  const parsed = parseColumnStableId(invalidatedStableId);
-  if (!parsed) return [];
-
   const mainPublication = mainCatalog.publications[publicationStableId];
   const branchPublication = branchCatalog.publications[publicationStableId];
   if (!mainPublication || !branchPublication) return [];
 
-  const matchesInvalidatedTable = (table: { schema: string; name: string }) =>
-    table.schema === parsed.schema && table.name === parsed.table;
-
-  const mainTables = mainPublication.tables.filter(matchesInvalidatedTable);
-  const branchTables = branchPublication.tables.filter(matchesInvalidatedTable);
+  const mainTables = getPublicationTablesToRelease(
+    referencedStableId,
+    mainPublication,
+  );
+  const branchTables = getPublicationTablesToRelease(
+    referencedStableId,
+    branchPublication,
+  );
   if (mainTables.length === 0 && branchTables.length === 0) return [];
 
   const replacementChanges: Change[] = [];
@@ -1085,6 +1095,24 @@ function buildPublicationTableReplacementChanges(
   }
 
   return replacementChanges;
+}
+
+function getPublicationTablesToRelease(
+  referencedStableId: string,
+  publication: Catalog["publications"][string],
+): Catalog["publications"][string]["tables"] {
+  const parsed = parseColumnStableId(referencedStableId);
+  if (parsed) {
+    return publication.tables.filter(
+      (table) => table.schema === parsed.schema && table.name === parsed.table,
+    );
+  }
+
+  if (referencedStableId.startsWith("procedure:")) {
+    return publication.tables.filter((table) => table.row_filter !== null);
+  }
+
+  return [];
 }
 
 function buildConstraintReplacementChanges(

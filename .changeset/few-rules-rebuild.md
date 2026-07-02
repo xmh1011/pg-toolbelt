@@ -7,3 +7,5 @@ Recreate dependent rules, triggers, check constraints, generated column expressi
 Generated columns on PostgreSQL 17+ now use the drop/add rebuild path when the target type has no assignment or implicit cast from the existing stored type, and aggregate signature changes are seeded as replacement roots so dependent rewrite objects are dropped before the old aggregate signature.
 
 Domain CHECK constraints and defaults that depend on routines rebuilt from column invalidations are now dropped and restored around the routine replacement, and PostgreSQL 17+ generated columns are rebuilt when either side of the type change uses a domain type that could reject temporary NULL resets.
+
+Column and domain defaults that depend on replaced routine signatures are now dropped and restored around the routine replacement instead of escalating to owning table or domain recreation. Publication table filters reached from routine replacement roots are released with their publication table membership, and generated-column rebuilds now restore column comments, security labels, and column grants even when the old column was a regular column without a default.

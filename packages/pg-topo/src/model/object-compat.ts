@@ -319,6 +319,8 @@ const operatorClassTypeCompatible = (
   const requiredBase = signatureArgBase(requiredArg);
   const providedBase = signatureArgBase(providedArg);
   return (
+    builtInArgResolvesToCatalog(requiredArg) &&
+    builtInArgResolvesToCatalog(providedArg) &&
     BINARY_COERCIBLE_OPERATOR_CLASS_TYPES[requiredBase]?.includes(
       providedBase,
     ) === true

@@ -50,6 +50,7 @@ type ExtractionContext = {
   rangeTypeKeys: ReadonlySet<string>;
   multirangeTypeKeys: ReadonlySet<string>;
   domainBaseTypes: ReadonlyMap<string, ObjectRef>;
+  operatorFamilyKeys: ReadonlySet<string>;
   routineReturnProviders: readonly ObjectRef[];
 };
 
@@ -59,6 +60,7 @@ const EMPTY_EXTRACTION_CONTEXT: ExtractionContext = {
   rangeTypeKeys: new Set(),
   multirangeTypeKeys: new Set(),
   domainBaseTypes: new Map(),
+  operatorFamilyKeys: new Set(),
   routineReturnProviders: [],
 };
 
@@ -1409,6 +1411,39 @@ const builtInBtreeOperatorFamilyNames = new Set([
   "xid8_ops",
 ]);
 
+const builtInOrderByOperatorFamilyReturnTypes = new Map([
+  ["float_ops", "float8"],
+  ["integer_ops", "int4"],
+  ["numeric_ops", "numeric"],
+]);
+
+const orderByOperatorReturnType = (
+  orderFamilyNameParts: string[],
+  orderFamilyRef: ObjectRef | null,
+  context: ExtractionContext = EMPTY_EXTRACTION_CONTEXT,
+): ObjectRef | null => {
+  const name = orderFamilyNameParts.at(-1)?.toLowerCase();
+  if (
+    !name ||
+    (!isBuiltInBtreeOperatorFamilyName(orderFamilyNameParts) &&
+      !isUnqualifiedBuiltInBtreeOperatorFamilyName(orderFamilyNameParts))
+  ) {
+    return null;
+  }
+  if (
+    orderFamilyNameParts.length === 1 &&
+    orderFamilyRef &&
+    context.operatorFamilyKeys.has(
+      operatorFamilyContextKey(orderFamilyRef, "btree"),
+    )
+  ) {
+    return null;
+  }
+
+  const returnTypeName = builtInOrderByOperatorFamilyReturnTypes.get(name);
+  return returnTypeName ? createObjectRefFromAst("type", returnTypeName) : null;
+};
+
 const builtInHashOperatorFamilyNames = new Set([
   "aclitem_ops",
   "array_ops",
@@ -1604,6 +1639,36 @@ const accessMethodRef = (
     undefined,
     kind ? accessMethodSignature(kind) : undefined,
   );
+
+const builtInIndexAccessMethodHandlerNames = new Set([
+  "brinhandler",
+  "bthandler",
+  "ginhandler",
+  "gisthandler",
+  "hashhandler",
+  "spghandler",
+]);
+const builtInTableAccessMethodHandlerNames = new Set(["heap_tableam_handler"]);
+
+const isBuiltInAccessMethodHandlerName = (
+  nameParts: string[],
+  kind: AccessMethodKind | null,
+): boolean => {
+  const name = nameParts.at(-1)?.toLowerCase();
+  if (!name || kind === null) {
+    return false;
+  }
+  if (
+    nameParts.length !== 1 &&
+    !(nameParts.length === 2 && nameParts[0]?.toLowerCase() === "pg_catalog")
+  ) {
+    return false;
+  }
+
+  return kind === "index"
+    ? builtInIndexAccessMethodHandlerNames.has(name)
+    : builtInTableAccessMethodHandlerNames.has(name);
+};
 
 const addAccessMethodDependencyIfNeeded = (
   accessMethod: string,
@@ -2958,6 +3023,18 @@ const operatorClassSupportFunctionReturnType = (
     return createObjectRefFromAst("type", "void");
   }
 
+  if (normalizedAccessMethod === "brin") {
+    if (supportNumber === 1) {
+      return createObjectRefFromAst("type", "internal");
+    }
+    if (supportNumber === 2 || supportNumber === 3) {
+      return createObjectRefFromAst("type", "bool");
+    }
+    if (supportNumber === 4) {
+      return createObjectRefFromAst("type", "void");
+    }
+  }
+
   if (normalizedAccessMethod === "btree") {
     if (supportNumber === 1) {
       return createObjectRefFromAst("type", "int4");
@@ -3086,6 +3163,19 @@ const addCreatedTypeKey = (
   typeKeys.add(contextTypeKey(typeRef));
 };
 
+const operatorFamilyContextKey = (
+  familyRef: ObjectRef,
+  accessMethod: string,
+): string =>
+  objectRefKey(
+    createObjectRefFromAst(
+      "operator_family",
+      familyRef.name,
+      familyRef.schema ?? DEFAULT_SCHEMA,
+      operatorFamilySignature(accessMethod),
+    ),
+  );
+
 export const createExtractionContext = (
   astNodes: readonly unknown[],
   externalProviders: readonly ObjectRef[] = [],
@@ -3095,10 +3185,28 @@ export const createExtractionContext = (
   const rangeTypeKeys = new Set<string>();
   const multirangeTypeKeys = new Set<string>();
   const domainBaseTypes = new Map<string, ObjectRef>();
+  const operatorFamilyKeys = new Set<string>();
   const routineReturnProviders: ObjectRef[] = [];
 
   for (const astNode of astNodes) {
     const astRecord = asRecord(astNode);
+    const operatorFamilyStmt = asRecord(astRecord?.CreateOpFamilyStmt);
+    if (operatorFamilyStmt) {
+      const accessMethod =
+        typeof operatorFamilyStmt.amname === "string"
+          ? operatorFamilyStmt.amname
+          : "";
+      const operatorFamilyRef = objectFromNameParts(
+        "operator_family",
+        extractNameParts(operatorFamilyStmt.opfamilyname),
+      );
+      if (operatorFamilyRef) {
+        operatorFamilyKeys.add(
+          operatorFamilyContextKey(operatorFamilyRef, accessMethod),
+        );
+      }
+    }
+
     const functionStmt = asRecord(astRecord?.CreateFunctionStmt);
     if (functionStmt) {
       const extraction = extractCreateFunctionDependencies(
@@ -3258,6 +3366,7 @@ export const createExtractionContext = (
     rangeTypeKeys,
     multirangeTypeKeys,
     domainBaseTypes,
+    operatorFamilyKeys,
     routineReturnProviders,
   };
 };
@@ -3840,6 +3949,11 @@ const builtInOperatorImplementationFunctionSignatures = new Map<
   ["jsonb_le", [["jsonb", "jsonb"]]],
   ["jsonb_lt", [["jsonb", "jsonb"]]],
   ["jsonb_ne", [["jsonb", "jsonb"]]],
+  ["jsonb_contains", [["jsonb", "jsonb"]]],
+  ["jsonb_contained", [["jsonb", "jsonb"]]],
+  ["jsonb_exists", [["jsonb", "text"]]],
+  ["jsonb_exists_all", [["jsonb", "text[]"]]],
+  ["jsonb_exists_any", [["jsonb", "text[]"]]],
   ["macaddr_eq", [["macaddr", "macaddr"]]],
   ["macaddr_ge", [["macaddr", "macaddr"]]],
   ["macaddr_gt", [["macaddr", "macaddr"]]],
@@ -4355,6 +4469,7 @@ const extractCreateAccessMethodDependencies = (
     extractNameParts(statementNode.handler_name),
   );
   if (handlerRef) {
+    const handlerNameParts = extractNameParts(statementNode.handler_name);
     const handlerReturnType =
       accessMethodKind === null
         ? null
@@ -4364,21 +4479,26 @@ const extractCreateAccessMethodDependencies = (
               ? "index_am_handler"
               : "table_am_handler",
           );
-    requires.push(
-      markExactKindRef(
-        markExactSignatureRef(
-          createObjectRefFromAst(
-            "function",
-            handlerRef.name,
-            handlerRef.schema,
-            typeRefsSignature(
-              [createObjectRefFromAst("type", "internal")],
-              handlerReturnType,
-            ),
+    const exactHandlerRef = markExactKindRef(
+      markExactSignatureRef(
+        createObjectRefFromAst(
+          "function",
+          handlerRef.name,
+          handlerRef.schema,
+          typeRefsSignature(
+            [createObjectRefFromAst("type", "internal")],
+            handlerReturnType,
           ),
         ),
       ),
     );
+    if (isBuiltInAccessMethodHandlerName(handlerNameParts, accessMethodKind)) {
+      if (handlerNameParts.length === 1) {
+        requires.push(markOmitIfNoLocalProducerRef(exactHandlerRef));
+      }
+    } else {
+      requires.push(exactHandlerRef);
+    }
     if (handlerRef.schema) {
       requires.push(createObjectRefFromAst("schema", handlerRef.schema));
     }
@@ -4526,6 +4646,11 @@ const extractCreateOperatorClassDependencies = (
       );
       const isOrderingOperator = Boolean(orderFamilyRef);
       const orderFamilyNameParts = extractNameParts(item.order_family);
+      const orderFamilyReturnType = orderByOperatorReturnType(
+        orderFamilyNameParts,
+        orderFamilyRef,
+        context,
+      );
       if (orderFamilyRef) {
         const orderFamilyRequirement = createObjectRefFromAst(
           "operator_family",
@@ -4551,16 +4676,19 @@ const extractCreateOperatorClassDependencies = (
         }
       }
 
-      const boolReturnOperatorRefFor = (
+      const exactReturnOperatorRefFor = (
         operatorRef: ObjectRef,
       ): ObjectRef | null =>
-        !isOrderingOperator && operatorRef.signature
+        operatorRef.signature && (!isOrderingOperator || orderFamilyReturnType)
           ? markExactSignatureRef(
               createObjectRefFromAst(
                 "operator",
                 operatorRef.name,
                 operatorRef.schema,
-                `${operatorRef.signature}->bool`,
+                `${operatorRef.signature}->${typeSignaturePart(
+                  orderFamilyReturnType ??
+                    createObjectRefFromAst("type", "bool"),
+                )}`,
               ),
             )
           : null;
@@ -4584,10 +4712,11 @@ const extractCreateOperatorClassDependencies = (
           );
           if (operatorRef) {
             requires.push(markOmitIfNoLocalProducerRef(operatorRef));
-            const boolReturnOperatorRef = boolReturnOperatorRefFor(operatorRef);
-            if (boolReturnOperatorRef) {
+            const exactReturnOperatorRef =
+              exactReturnOperatorRefFor(operatorRef);
+            if (exactReturnOperatorRef) {
               requires.push(
-                markOmitIfNoLocalProducerRef(boolReturnOperatorRef),
+                markOmitIfNoLocalProducerRef(exactReturnOperatorRef),
               );
             }
           }
@@ -4605,9 +4734,9 @@ const extractCreateOperatorClassDependencies = (
       );
       if (operatorRef) {
         requires.push(operatorRef);
-        const boolReturnOperatorRef = boolReturnOperatorRefFor(operatorRef);
-        if (boolReturnOperatorRef) {
-          requires.push(markOmitIfNoLocalProducerRef(boolReturnOperatorRef));
+        const exactReturnOperatorRef = exactReturnOperatorRefFor(operatorRef);
+        if (exactReturnOperatorRef) {
+          requires.push(markOmitIfNoLocalProducerRef(exactReturnOperatorRef));
         }
         if (isPgCatalogQualifiedName(nameParts)) {
           diagnostics.push({

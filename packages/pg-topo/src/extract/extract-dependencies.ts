@@ -1821,6 +1821,67 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
     ],
   ],
   ["ginarrayextract", [["anyarray", "internal", "internal"]]],
+  ["gin_compare_jsonb", [["text", "text"]]],
+  [
+    "gin_consistent_jsonb",
+    [
+      [
+        "internal",
+        "int2",
+        "jsonb",
+        "int4",
+        "internal",
+        "internal",
+        "internal",
+        "internal",
+      ],
+    ],
+  ],
+  [
+    "gin_consistent_jsonb_path",
+    [
+      [
+        "internal",
+        "int2",
+        "jsonb",
+        "int4",
+        "internal",
+        "internal",
+        "internal",
+        "internal",
+      ],
+    ],
+  ],
+  ["gin_extract_jsonb", [["jsonb", "internal", "internal"]]],
+  ["gin_extract_jsonb_path", [["jsonb", "internal", "internal"]]],
+  [
+    "gin_extract_jsonb_query",
+    [
+      [
+        "jsonb",
+        "internal",
+        "int2",
+        "internal",
+        "internal",
+        "internal",
+        "internal",
+      ],
+    ],
+  ],
+  [
+    "gin_extract_jsonb_query_path",
+    [
+      [
+        "jsonb",
+        "internal",
+        "int2",
+        "internal",
+        "internal",
+        "internal",
+        "internal",
+      ],
+    ],
+  ],
   [
     "ginarraytriconsistent",
     [
@@ -1834,6 +1895,14 @@ const builtInOperatorClassSupportFunctionSignatures = new Map<
         "internal",
       ],
     ],
+  ],
+  [
+    "gin_triconsistent_jsonb",
+    [["internal", "int2", "jsonb", "int4", "internal", "internal", "internal"]],
+  ],
+  [
+    "gin_triconsistent_jsonb_path",
+    [["internal", "int2", "jsonb", "int4", "internal", "internal", "internal"]],
   ],
   [
     "ginqueryarrayextract",
@@ -2852,6 +2921,20 @@ const operatorFamilySignature = (accessMethod: string): string | undefined => {
     : `(${trimmed})`;
 };
 
+const operatorFamilyAccessMethodFromSignature = (
+  signature?: string,
+): string | null => {
+  const trimmed = signature?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized =
+    trimmed.startsWith("(") && trimmed.endsWith(")")
+      ? trimmed.slice(1, -1).trim()
+      : trimmed;
+  return normalized && !normalized.includes(",") ? normalized : null;
+};
+
 const operatorNoneArgRef = (): ObjectRef =>
   createObjectRefFromAst("type", "none");
 
@@ -2926,7 +3009,7 @@ const routineReturnTypeSignaturePart = (
       return returnTypeSignaturePart(providerRef.signature);
     }
   }
-  return null;
+  return builtInOperatorImplementationReturnType(functionRef, argsSignature);
 };
 
 const objectWithArgsRef = (
@@ -3243,6 +3326,27 @@ export const createExtractionContext = (
       }
     }
 
+    const operatorClassStmt = asRecord(astRecord?.CreateOpClassStmt);
+    if (operatorClassStmt) {
+      const accessMethod =
+        typeof operatorClassStmt.amname === "string"
+          ? operatorClassStmt.amname
+          : "";
+      const explicitOperatorFamilyRef = objectFromNameParts(
+        "operator_family",
+        extractNameParts(operatorClassStmt.opfamilyname),
+      );
+      const implicitOperatorFamilyRef = objectFromNameParts(
+        "operator_family",
+        extractNameParts(operatorClassStmt.opclassname),
+      );
+      if (!explicitOperatorFamilyRef && implicitOperatorFamilyRef) {
+        operatorFamilyKeys.add(
+          operatorFamilyContextKey(implicitOperatorFamilyRef, accessMethod),
+        );
+      }
+    }
+
     const functionStmt = asRecord(astRecord?.CreateFunctionStmt);
     if (functionStmt) {
       const extraction = extractCreateFunctionDependencies(
@@ -3368,6 +3472,24 @@ export const createExtractionContext = (
   }
 
   for (const providerRef of externalProviders) {
+    if (
+      providerRef.kind === "function" &&
+      returnTypeSignaturePart(providerRef.signature)
+    ) {
+      routineReturnProviders.push(providerRef);
+    }
+
+    if (providerRef.kind === "operator_family") {
+      const accessMethod = operatorFamilyAccessMethodFromSignature(
+        providerRef.signature,
+      );
+      if (accessMethod) {
+        operatorFamilyKeys.add(
+          operatorFamilyContextKey(providerRef, accessMethod),
+        );
+      }
+    }
+
     if (
       providerRef.kind === "table" ||
       providerRef.kind === "view" ||
@@ -4217,6 +4339,58 @@ const isBuiltInOperatorImplementationFunctionName = (
         typeRefMatchesBuiltInNames(args[index] ?? null, [typeName]),
       ),
   );
+};
+
+const booleanBuiltInOperatorImplementationNames = new Set([
+  "array_eq",
+  "arraycontained",
+  "arraycontains",
+  "arrayoverlap",
+  "jsonb_contained",
+  "jsonb_contains",
+  "jsonb_exists",
+  "jsonb_exists_all",
+  "jsonb_exists_any",
+  "network_overlap",
+  "network_sub",
+  "network_subeq",
+  "network_sup",
+  "network_supeq",
+]);
+
+const builtInOperatorImplementationReturnsBool = (name: string): boolean =>
+  /(?:eq|ne|lt|le|gt|ge)$/.test(name) ||
+  booleanBuiltInOperatorImplementationNames.has(name);
+
+const builtInOperatorImplementationReturnType = (
+  functionRef: ObjectRef,
+  argsSignature: string,
+): string | null => {
+  if (
+    functionRef.kind !== "function" ||
+    (functionRef.schema !== DEFAULT_SCHEMA &&
+      functionRef.schema !== "pg_catalog")
+  ) {
+    return null;
+  }
+
+  const name = functionRef.name.toLowerCase();
+  const builtInSignatures =
+    builtInOperatorImplementationFunctionSignatures.get(name);
+  if (!builtInSignatures || !builtInOperatorImplementationReturnsBool(name)) {
+    return null;
+  }
+
+  for (const signature of builtInSignatures) {
+    if (
+      signaturesCompatible(argsSignature, `(${signature.join(",")})`, {
+        requireExactArity: true,
+      })
+    ) {
+      return "bool";
+    }
+  }
+  return null;
 };
 
 const addInvalidPgCatalogTypeDiagnostic = (
@@ -5640,12 +5814,19 @@ const extractDependencyRefs = (
         }
       }
 
+      const requires = relationRef ? [relationRef] : [];
+      const accessMethod =
+        typeof indexStmt?.accessMethod === "string"
+          ? indexStmt.accessMethod
+          : "";
+      addAccessMethodDependencyIfNeeded(accessMethod, requires, "index");
+
       return {
         provides: dedupeObjectRefs([
           ...(indexRef ? [indexRef] : []),
           ...uniqueKeyProvides,
         ]),
-        requires: relationRef ? [relationRef] : [],
+        requires,
       };
     }
     case "CREATE_OPERATOR":

@@ -2179,6 +2179,83 @@ describe("range type dependencies", () => {
     expect(operatorClassIndex).toBeGreaterThan(familyIndex);
   });
 
+  test("preserves implicit local order-by operator families with built-in names", async () => {
+    const result = await analyzeAndSort([
+      "set search_path = public, pg_catalog;",
+      "create operator class app.score_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by float_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal);",
+      "create operator class float_ops for type app.score using btree as operator 1 < (app.score, app.score), function 1 app.score_cmp(app.score, app.score);",
+      "create operator <-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+      "create operator < (function = app.score_lt, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
+      "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select case when (a).value < (b).value then -1 when (a).value > (b).value then 1 else 0 end $$;",
+      "create function app.score_distance(a app.score, b app.score) returns int4 language sql immutable strict as $$ select abs((a).value - (b).value) $$;",
+      "create function app.score_lt(a app.score, b app.score) returns boolean language sql immutable strict as $$ select (a).value < (b).value $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingFloatReturn = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "<->" &&
+            ref.signature === "(app.score,app.score)->float8",
+        ) === true,
+    );
+    const operatorClassStatement = result.ordered.find((statement) =>
+      statement.sql
+        .toLowerCase()
+        .includes("create operator class app.score_ops"),
+    );
+
+    expect(missingFloatReturn).toHaveLength(0);
+    expect(operatorClassStatement?.requires).toContainEqual({
+      kind: "operator_family",
+      schema: "public",
+      name: "float_ops",
+      signature: "(btree)",
+    });
+  });
+
+  test("preserves external order-by operator families with built-in names", async () => {
+    const result = await analyzeAndSort(
+      [
+        "set search_path = public, pg_catalog;",
+        "create operator class app.score_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by float_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal);",
+        "create operator <-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+        "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
+        "create function app.score_distance(a app.score, b app.score) returns int4 language sql immutable strict as $$ select abs((a).value - (b).value) $$;",
+        "create type app.score as (value int4);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "operator_family",
+            schema: "public",
+            name: "float_ops",
+            signature: "(btree)",
+          },
+        ],
+      },
+    );
+    const missingFloatReturn = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "public" &&
+            ref.name === "<->" &&
+            ref.signature === "(app.score,app.score)->float8",
+        ) === true,
+    );
+
+    expect(missingFloatReturn).toHaveLength(0);
+  });
+
   test("preserves unqualified custom opclass support operators", async () => {
     const result = await analyzeAndSort([
       "set search_path = public, pg_catalog;",
@@ -6226,6 +6303,36 @@ describe("range type dependencies", () => {
     expect(unresolvedSpgistFunctions).toHaveLength(0);
   });
 
+  test("accepts shipped JSONB GIN support routines", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.jsonb_ops for type jsonb using gin as function 1 gin_compare_jsonb(text, text), function 2 gin_extract_jsonb(jsonb, internal, internal), function 3 gin_extract_jsonb_query(jsonb, internal, int2, internal, internal, internal, internal), function 4 gin_consistent_jsonb(internal, int2, jsonb, int4, internal, internal, internal, internal), function 6 gin_triconsistent_jsonb(internal, int2, jsonb, int4, internal, internal, internal);",
+      "create operator class app.jsonb_path_ops for type jsonb using gin as function 1 btint4cmp(int4, int4), function 2 gin_extract_jsonb_path(jsonb, internal, internal), function 3 gin_extract_jsonb_query_path(jsonb, internal, int2, internal, internal, internal, internal), function 4 gin_consistent_jsonb_path(internal, int2, jsonb, int4, internal, internal, internal, internal), function 6 gin_triconsistent_jsonb_path(internal, int2, jsonb, int4, internal, internal, internal);",
+      "create schema app;",
+    ]);
+    const unresolvedJsonbGinFunctions = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            [
+              "gin_compare_jsonb",
+              "gin_consistent_jsonb",
+              "gin_consistent_jsonb_path",
+              "gin_extract_jsonb",
+              "gin_extract_jsonb_path",
+              "gin_extract_jsonb_query",
+              "gin_extract_jsonb_query_path",
+              "gin_triconsistent_jsonb",
+              "gin_triconsistent_jsonb_path",
+            ].includes(ref.name),
+        ) === true,
+    );
+
+    expect(unresolvedJsonbGinFunctions).toHaveLength(0);
+  });
+
   test("diagnoses invalid pg_catalog operator class data types", async () => {
     const result = await analyzeAndSort([
       "create operator class app.bad_ops for type pg_catalog.no_such using gist as operator 1 << (box, box);",
@@ -6396,6 +6503,80 @@ describe("range type dependencies", () => {
     );
 
     expect(unresolvedJsonbCallbacks).toHaveLength(0);
+  });
+
+  test("infers return-aware operators from built-in callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.int4_ops for type int4 using btree as operator 1 app.< (int4, int4), function 1 btint4cmp(int4, int4);",
+      "create operator app.< (function = int4lt, leftarg = int4, rightarg = int4);",
+      "create schema app;",
+    ]);
+    const missingBooleanOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<" &&
+            ref.signature === "(int4,int4)->bool",
+        ) === true,
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<"),
+    );
+
+    expect(missingBooleanOperator).toHaveLength(0);
+    expect(operatorStatement?.provides).toContainEqual({
+      kind: "operator",
+      schema: "app",
+      name: "<",
+      signature: "(int4,int4)->bool",
+    });
+  });
+
+  test("infers return-aware operators from external callbacks", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator class app.score_ops for type app.score using btree as operator 1 app.< (app.score, app.score), function 1 app.score_cmp(app.score, app.score);",
+        "create operator app.< (function = app.score_lt_external, leftarg = app.score, rightarg = app.score);",
+        "create function app.score_cmp(a app.score, b app.score) returns int4 language sql immutable strict as $$ select 0 $$;",
+        "create type app.score as (value int4);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "score_lt_external",
+            signature: "(app.score,app.score)->bool",
+          },
+        ],
+      },
+    );
+    const missingBooleanOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<" &&
+            ref.signature === "(app.score,app.score)->bool",
+        ) === true,
+    );
+    const operatorStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create operator app.<"),
+    );
+
+    expect(missingBooleanOperator).toHaveLength(0);
+    expect(operatorStatement?.provides).toContainEqual({
+      kind: "operator",
+      schema: "app",
+      name: "<",
+      signature: "(app.score,app.score)->bool",
+    });
   });
 
   test("does not require built-in schemas for operator link refs", async () => {
@@ -6840,6 +7021,34 @@ describe("range type dependencies", () => {
     expect(unresolvedAccessMethod).toHaveLength(0);
     expect(accessMethodIndex).toBeGreaterThanOrEqual(0);
     expect(familyIndex).toBeGreaterThan(accessMethodIndex);
+  });
+
+  test("tracks custom access methods required by indexes", async () => {
+    const result = await analyzeAndSort([
+      "create index events_score_idx on app.events using myam (score);",
+      "create table app.events(score int4);",
+      "create schema app;",
+    ]);
+    const missingAccessMethod = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "access_method" &&
+            ref.name === "myam" &&
+            ref.signature === "(index)",
+        ) === true,
+    );
+    const indexStatement = result.ordered.find((statement) =>
+      statement.sql.toLowerCase().includes("create index events_score_idx"),
+    );
+
+    expect(missingAccessMethod).toHaveLength(1);
+    expect(indexStatement?.requires).toContainEqual({
+      kind: "access_method",
+      name: "myam",
+      signature: "(index)",
+    });
   });
 
   test("catalog-qualifies built-in operator callback argument signatures", async () => {

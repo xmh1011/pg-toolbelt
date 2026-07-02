@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   isKindCompatible,
+  operatorClassSignaturesCompatible,
   signaturesCompatible,
 } from "../src/model/object-compat";
 
@@ -260,6 +261,26 @@ describe("signaturesCompatible with allowVariadicProviderTail", () => {
     expect(signaturesCompatible("(int,text,json)", "(anyelement)", opts)).toBe(
       false,
     );
+  });
+});
+
+describe("operatorClassSignaturesCompatible", () => {
+  test("restricts binary-coercible operator class matches to catalog types", () => {
+    expect(
+      operatorClassSignaturesCompatible("(btree,varchar)", "(btree,text)"),
+    ).toBe(true);
+    expect(
+      operatorClassSignaturesCompatible(
+        "(btree,pg_catalog.varchar)",
+        "(btree,pg_catalog.text)",
+      ),
+    ).toBe(true);
+    expect(
+      operatorClassSignaturesCompatible("(btree,app.varchar)", "(btree,text)"),
+    ).toBe(false);
+    expect(
+      operatorClassSignaturesCompatible("(btree,varchar)", "(btree,app.text)"),
+    ).toBe(false);
   });
 });
 

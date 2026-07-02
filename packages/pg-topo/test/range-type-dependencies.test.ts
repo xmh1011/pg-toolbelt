@@ -1987,8 +1987,9 @@ describe("range type dependencies", () => {
   test("does not require producer statements for built-in order-by operator families", async () => {
     const result = await analyzeAndSort([
       "create operator class app.score_float_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by float_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
-      "create operator class app.score_integer_ops for type app.score using gist as operator 1 <-> (app.score, app.score) for order by integer_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
+      "create operator class app.score_integer_ops for type app.score using gist as operator 1 <#> (app.score, app.score) for order by integer_ops, function 1 app.score_consistent(internal, app.score, smallint, oid, internal), function 2 app.score_union(internal, internal), function 3 app.score_compress(internal), function 4 app.score_decompress(internal), function 5 app.score_penalty(internal, internal, internal), function 6 app.score_picksplit(internal, internal), function 7 app.score_same(app.score, app.score, internal);",
       "create operator <-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+      "create operator <#> (function = app.score_rank, leftarg = app.score, rightarg = app.score);",
       "create function app.score_consistent(internal, app.score, smallint, oid, internal) returns bool language internal immutable strict as 'gbt_int4_consistent';",
       "create function app.score_union(internal, internal) returns app.score language internal immutable strict as 'gbt_int4_union';",
       "create function app.score_compress(internal) returns internal language internal immutable strict as 'gbt_int4_compress';",
@@ -1997,6 +1998,7 @@ describe("range type dependencies", () => {
       "create function app.score_picksplit(internal, internal) returns internal language internal immutable strict as 'gbt_int4_picksplit';",
       "create function app.score_same(app.score, app.score, internal) returns internal language internal immutable strict as 'gbt_int4_same';",
       "create function app.score_distance(a app.score, b app.score) returns float8 language sql immutable strict as $$ select abs((a).value - (b).value)::float8 $$;",
+      "create function app.score_rank(a app.score, b app.score) returns int4 language sql immutable strict as $$ select abs((a).value - (b).value) $$;",
       "create type app.score as (value int4);",
       "create schema app;",
     ]);
@@ -6274,6 +6276,37 @@ describe("range type dependencies", () => {
     expect(missingJsonpath).toHaveLength(0);
   });
 
+  test("accepts polymorphic pseudo-types as built-in operator argument types", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create operator app.=== (function = app.compat_eq, leftarg = anycompatiblearray, rightarg = anycompatiblearray);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "app",
+            name: "compat_eq",
+            signature: "(anycompatiblearray,anycompatiblearray)",
+          },
+        ],
+      },
+    );
+    const missingPseudoTypes = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "type" &&
+            ref.schema === "public" &&
+            ref.name === "anycompatiblearray",
+        ) === true,
+    );
+
+    expect(missingPseudoTypes).toHaveLength(0);
+  });
+
   test("accepts valid pg_catalog types outside the local built-in allow-list", async () => {
     const result = await analyzeAndSort(
       [
@@ -6343,6 +6376,26 @@ describe("range type dependencies", () => {
     );
 
     expect(unresolvedIntegerCallback).toHaveLength(0);
+  });
+
+  test("accepts built-in JSONB operator callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create operator app.@> (function = jsonb_contains, leftarg = jsonb, rightarg = jsonb);",
+      "create operator app.?| (function = jsonb_exists_any, leftarg = jsonb, rightarg = text[]);",
+      "create schema app;",
+    ]);
+    const unresolvedJsonbCallbacks = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ["jsonb_contains", "jsonb_exists_any"].includes(ref.name),
+        ) === true,
+    );
+
+    expect(unresolvedJsonbCallbacks).toHaveLength(0);
   });
 
   test("does not require built-in schemas for operator link refs", async () => {
@@ -7051,6 +7104,25 @@ describe("range type dependencies", () => {
     expect(missingHandler).toHaveLength(1);
   });
 
+  test("does not require producers for unqualified built-in access method handlers", async () => {
+    const result = await analyzeAndSort([
+      "create access method copied_btree type index handler bthandler;",
+      "create access method copied_heap type table handler heap_tableam_handler;",
+    ]);
+    const missingBuiltInHandlers = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ["bthandler", "heap_tableam_handler"].includes(ref.name),
+        ) === true,
+    );
+
+    expect(missingBuiltInHandlers).toHaveLength(0);
+  });
+
   test("requires index access methods for operator families and classes", async () => {
     const tableAccessMethodResult = await analyzeAndSort(
       [
@@ -7540,6 +7612,47 @@ describe("range type dependencies", () => {
     expect(missingOptions).toHaveLength(5);
   });
 
+  test("requires BRIN support callbacks to return PostgreSQL callback types", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_brin_ops for type int4 using brin as function 1 app.brin_opcinfo(internal), function 2 app.brin_add_value(internal, internal, internal, internal), function 3 app.brin_consistent(internal, internal, internal), function 4 app.brin_union(internal, internal, internal);",
+      "create function app.brin_opcinfo(value internal) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create function app.brin_add_value(a internal, b internal, c internal, d internal) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create function app.brin_consistent(a internal, b internal, c internal) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create function app.brin_union(a internal, b internal, c internal) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create schema app;",
+    ]);
+    const missingBrinCallbacks = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            [
+              "brin_opcinfo",
+              "brin_add_value",
+              "brin_consistent",
+              "brin_union",
+            ].includes(ref.name),
+        ) === true,
+    );
+
+    expect(missingBrinCallbacks).toHaveLength(4);
+    expect(
+      missingBrinCallbacks.flatMap(
+        (diagnostic) =>
+          diagnostic.objectRefs?.map((ref) => ref.signature) ?? [],
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "(internal)->internal",
+        "(internal,internal,internal,internal)->bool",
+        "(internal,internal,internal)->bool",
+        "(internal,internal,internal)->void",
+      ]),
+    );
+  });
+
   test("requires base type callbacks to return PostgreSQL callback types", async () => {
     const result = await analyzeAndSort([
       "create type app.score (input = app.score_in, output = app.score_out, send = app.score_send, internallength = 4, alignment = int4);",
@@ -7708,5 +7821,28 @@ describe("range type dependencies", () => {
     );
 
     expect(missingBooleanOperator).toHaveLength(1);
+  });
+
+  test("requires opclass order-by operators to return the order family type", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.score_ops for type app.score using gist as operator 1 app.<-> (app.score, app.score) for order by float_ops;",
+      "create operator app.<-> (function = app.score_distance, leftarg = app.score, rightarg = app.score);",
+      "create function app.score_distance(a app.score, b app.score) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create type app.score as (value int4);",
+      "create schema app;",
+    ]);
+    const missingFloatOperator = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "operator" &&
+            ref.schema === "app" &&
+            ref.name === "<->" &&
+            ref.signature === "(app.score,app.score)->float8",
+        ) === true,
+    );
+
+    expect(missingFloatOperator).toHaveLength(1);
   });
 });

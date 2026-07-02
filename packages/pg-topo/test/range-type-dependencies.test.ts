@@ -6557,7 +6557,7 @@ describe("range type dependencies", () => {
             ref.kind === "function" &&
             ref.schema === "pg_catalog" &&
             ref.name === "no_such" &&
-            ref.signature === "(internal)",
+            ref.signature === "(internal)->bool",
         ) === true,
     );
     const missingStorageType = result.diagnostics.filter(
@@ -7653,6 +7653,46 @@ describe("range type dependencies", () => {
     );
   });
 
+  test("requires GiST, GIN, and SP-GiST support callbacks to return PostgreSQL callback types", async () => {
+    const result = await analyzeAndSort([
+      "create operator class app.box_gist_ops for type box using gist as function 1 app.gist_consistent(internal, box, int2, oid, internal);",
+      "create operator class app.int_gin_ops for type int4 using gin as function 4 app.gin_consistent(internal, int2, int4, int4, internal, internal, internal, internal);",
+      "create operator class app.int_spgist_ops for type int4 using spgist as function 5 app.spgist_leaf_consistent(internal, internal);",
+      "create function app.gist_consistent(a internal, b box, c int2, d oid, e internal) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create function app.gin_consistent(a internal, b int2, c int4, d int4, e internal, f internal, g internal, h internal) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create function app.spgist_leaf_consistent(a internal, b internal) returns int4 language sql immutable strict as $$ select 0 $$;",
+      "create schema app;",
+    ]);
+    const missingCallbacks = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            [
+              "gist_consistent",
+              "gin_consistent",
+              "spgist_leaf_consistent",
+            ].includes(ref.name),
+        ) === true,
+    );
+
+    expect(missingCallbacks).toHaveLength(3);
+    expect(
+      missingCallbacks.flatMap(
+        (diagnostic) =>
+          diagnostic.objectRefs?.map((ref) => ref.signature) ?? [],
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "(internal,box,int2,oid,internal)->bool",
+        "(internal,int2,int4,int4,internal,internal,internal,internal)->bool",
+        "(internal,internal)->bool",
+      ]),
+    );
+  });
+
   test("requires base type callbacks to return PostgreSQL callback types", async () => {
     const result = await analyzeAndSort([
       "create type app.score (input = app.score_in, output = app.score_out, send = app.score_send, internallength = 4, alignment = int4);",
@@ -7741,6 +7781,27 @@ describe("range type dependencies", () => {
     expect(missingScalarDiff).toHaveLength(1);
   });
 
+  test("does not allow RETURNS TABLE functions to satisfy scalar range callbacks", async () => {
+    const result = await analyzeAndSort([
+      "create type app.int_range as range (subtype = int4, subtype_diff = app.diff);",
+      "create function app.diff(a int4, b int4) returns table(result float8) language sql immutable as $$ select (a - b)::float8 $$;",
+      "create schema app;",
+    ]);
+    const missingScalarDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "app" &&
+            ref.name === "diff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
+        ) === true,
+    );
+
+    expect(missingScalarDiff).toHaveLength(1);
+  });
+
   test("does not report implicit built-in type refs as self references", async () => {
     const result = await analyzeAndSort([
       "create table public.int4 (value int4);",
@@ -7766,6 +7827,38 @@ describe("range type dependencies", () => {
       "create function public.int4range_subdiff(a int4, b int4) returns int4 language sql immutable as $$ select a - b $$;",
       "create schema app;",
     ]);
+    const missingScalarDiff = result.diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.code === "UNRESOLVED_DEPENDENCY" &&
+        diagnostic.objectRefs?.some(
+          (ref) =>
+            ref.kind === "function" &&
+            ref.schema === "public" &&
+            ref.name === "int4range_subdiff" &&
+            ref.signature === "(pg_catalog.int4,pg_catalog.int4)->float8",
+        ) === true,
+    );
+
+    expect(missingScalarDiff).toHaveLength(1);
+  });
+
+  test("keeps wrong-return external built-in shadows as range callback requirements", async () => {
+    const result = await analyzeAndSort(
+      [
+        "create type app.int_range as range (subtype = int4, subtype_diff = int4range_subdiff);",
+        "create schema app;",
+      ],
+      {
+        externalProviders: [
+          {
+            kind: "function",
+            schema: "public",
+            name: "int4range_subdiff",
+            signature: "(pg_catalog.int4,pg_catalog.int4)->int4",
+          },
+        ],
+      },
+    );
     const missingScalarDiff = result.diagnostics.filter(
       (diagnostic) =>
         diagnostic.code === "UNRESOLVED_DEPENDENCY" &&

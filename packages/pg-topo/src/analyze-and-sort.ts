@@ -267,13 +267,17 @@ const hasReturnSignature = (signature?: string): boolean =>
 
 const omitRequirementsWithoutLocalProducers = (
   statementNodes: StatementNode[],
+  externalProviders: AnalyzeOptions["externalProviders"] = [],
 ): void => {
-  const providerKeys = new Set<string>();
+  const providerRefs: ObjectRef[] = [];
   for (const statementNode of statementNodes) {
-    for (const providedRef of statementNode.provides) {
-      providerKeys.add(objectRefKey(providedRef));
-    }
+    providerRefs.push(...statementNode.provides);
   }
+  providerRefs.push(...externalProviders);
+
+  const providerKeys = new Set(
+    providerRefs.map((providedRef) => objectRefKey(providedRef)),
+  );
 
   const operatorClassAccessMethod = (
     signature?: string,
@@ -289,7 +293,7 @@ const omitRequirementsWithoutLocalProducers = (
     return accessMethod && accessMethod.length > 0 ? accessMethod : undefined;
   };
 
-  const hasLocalOperatorClassShadow = (requiredRef: ObjectRef): boolean => {
+  const hasProducerOperatorClassShadow = (requiredRef: ObjectRef): boolean => {
     if (requiredRef.kind !== "operator_class") {
       return false;
     }
@@ -301,31 +305,29 @@ const omitRequirementsWithoutLocalProducers = (
       return false;
     }
 
-    for (const statementNode of statementNodes) {
-      for (const providedRef of statementNode.provides) {
-        if (providedRef.kind !== "operator_class") {
-          continue;
-        }
-        if (providedRef.name !== requiredRef.name) {
-          continue;
-        }
-        if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
-          continue;
-        }
-        if (
-          operatorClassAccessMethod(providedRef.signature) !==
-          requiredAccessMethod
-        ) {
-          continue;
-        }
-        return true;
+    for (const providedRef of providerRefs) {
+      if (providedRef.kind !== "operator_class") {
+        continue;
       }
+      if (providedRef.name !== requiredRef.name) {
+        continue;
+      }
+      if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
+        continue;
+      }
+      if (
+        operatorClassAccessMethod(providedRef.signature) !==
+        requiredAccessMethod
+      ) {
+        continue;
+      }
+      return true;
     }
 
     return false;
   };
 
-  const hasLocalProducer = (
+  const hasProducer = (
     requiredRef: NonNullable<StatementNode["requires"][number]>,
   ): boolean => {
     const requiredKey = objectRefKey(requiredRef);
@@ -333,71 +335,65 @@ const omitRequirementsWithoutLocalProducers = (
       return true;
     }
 
-    if (hasLocalOperatorClassShadow(requiredRef)) {
+    if (hasProducerOperatorClassShadow(requiredRef)) {
       return true;
     }
 
     const requiredArgsOnlySignature = argsOnlySignature(requiredRef.signature);
 
-    for (const statementNode of statementNodes) {
-      for (const providedRef of statementNode.provides) {
-        if (
-          requiresExactKind(requiredRef) &&
-          providedRef.kind !== requiredRef.kind
-        ) {
-          continue;
-        }
-        if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
-          continue;
-        }
-        if (providedRef.name !== requiredRef.name) {
-          continue;
-        }
-        if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
-          continue;
-        }
-        if (requiredArgsOnlySignature) {
-          const providedArgsOnlySignature = argsOnlySignature(
-            providedRef.signature,
-          );
-          if (
-            (!hasReturnSignature(requiredRef.signature) ||
-              hasReturnSignature(providedRef.signature)) &&
-            providedArgsOnlySignature &&
-            signaturesCompatible(
-              requiredArgsOnlySignature,
-              providedArgsOnlySignature,
-              {
-                rejectPolymorphicProviderArgs:
-                  requiresExactSignature(requiredRef),
-                requireExactArity: requiresExactSignature(requiredRef),
-              },
-            )
-          ) {
-            return true;
-          }
-        }
-        const requireExactSignature = requiresExactSignature(requiredRef);
-        const signaturesMatch =
-          requiredRef.kind === "operator_class" &&
-          providedRef.kind === "operator_class"
-            ? operatorClassSignaturesCompatible(
-                requiredRef.signature,
-                providedRef.signature,
-              )
-            : signaturesCompatible(
-                requiredRef.signature,
-                providedRef.signature,
-                {
-                  rejectPolymorphicProviderArgs: requireExactSignature,
-                  requireExactArity: requireExactSignature,
-                },
-              );
-        if (!signaturesMatch) {
-          continue;
-        }
-        return true;
+    for (const providedRef of providerRefs) {
+      if (
+        requiresExactKind(requiredRef) &&
+        providedRef.kind !== requiredRef.kind
+      ) {
+        continue;
       }
+      if (!isKindCompatible(requiredRef.kind, providedRef.kind)) {
+        continue;
+      }
+      if (providedRef.name !== requiredRef.name) {
+        continue;
+      }
+      if (requiredRef.schema && providedRef.schema !== requiredRef.schema) {
+        continue;
+      }
+      if (requiredArgsOnlySignature) {
+        const providedArgsOnlySignature = argsOnlySignature(
+          providedRef.signature,
+        );
+        if (
+          (!hasReturnSignature(requiredRef.signature) ||
+            hasReturnSignature(providedRef.signature)) &&
+          providedArgsOnlySignature &&
+          signaturesCompatible(
+            requiredArgsOnlySignature,
+            providedArgsOnlySignature,
+            {
+              rejectPolymorphicProviderArgs:
+                requiresExactSignature(requiredRef),
+              requireExactArity: requiresExactSignature(requiredRef),
+            },
+          )
+        ) {
+          return true;
+        }
+      }
+      const requireExactSignature = requiresExactSignature(requiredRef);
+      const signaturesMatch =
+        requiredRef.kind === "operator_class" &&
+        providedRef.kind === "operator_class"
+          ? operatorClassSignaturesCompatible(
+              requiredRef.signature,
+              providedRef.signature,
+            )
+          : signaturesCompatible(requiredRef.signature, providedRef.signature, {
+              rejectPolymorphicProviderArgs: requireExactSignature,
+              requireExactArity: requireExactSignature,
+            });
+      if (!signaturesMatch) {
+        continue;
+      }
+      return true;
     }
 
     return false;
@@ -406,8 +402,7 @@ const omitRequirementsWithoutLocalProducers = (
   for (const statementNode of statementNodes) {
     statementNode.requires = statementNode.requires.filter(
       (requiredRef) =>
-        !shouldOmitIfNoLocalProducer(requiredRef) ||
-        hasLocalProducer(requiredRef),
+        !shouldOmitIfNoLocalProducer(requiredRef) || hasProducer(requiredRef),
     );
   }
 };
@@ -582,7 +577,10 @@ export const analyzeAndSort = async (
     options?.externalProviders,
   );
   resolveExplicitOperatorFamilyProviders(statementNodes);
-  omitRequirementsWithoutLocalProducers(statementNodes);
+  omitRequirementsWithoutLocalProducers(
+    statementNodes,
+    options?.externalProviders,
+  );
 
   const graphState = buildGraph(statementNodes, options?.externalProviders);
   diagnostics.push(...graphState.diagnostics);

@@ -3056,6 +3056,42 @@ const operatorClassSupportFunctionReturnType = (
     }
   }
 
+  if (normalizedAccessMethod === "gist") {
+    if (supportNumber === 1) {
+      return createObjectRefFromAst("type", "bool");
+    }
+    if (supportNumber === 8) {
+      return createObjectRefFromAst("type", "float8");
+    }
+    if (supportNumber === 11) {
+      return createObjectRefFromAst("type", "void");
+    }
+  }
+
+  if (normalizedAccessMethod === "gin") {
+    if (supportNumber === 1 || supportNumber === 5) {
+      return createObjectRefFromAst("type", "int4");
+    }
+    if (supportNumber === 2 || supportNumber === 3) {
+      return createObjectRefFromAst("type", "internal");
+    }
+    if (supportNumber === 4) {
+      return createObjectRefFromAst("type", "bool");
+    }
+    if (supportNumber === 6) {
+      return createObjectRefFromAst("type", "char");
+    }
+  }
+
+  if (normalizedAccessMethod === "spgist") {
+    if ([1, 2, 3, 4].includes(supportNumber)) {
+      return createObjectRefFromAst("type", "void");
+    }
+    if (supportNumber === 5) {
+      return createObjectRefFromAst("type", "bool");
+    }
+  }
+
   return null;
 };
 

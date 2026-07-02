@@ -83,6 +83,10 @@ function canAlterColumnTypeWithoutUsing(
   return assignmentCastSourceTypeOids.includes(mainCol.data_type_oid);
 }
 
+function usesDomainType(...columns: TableColumn[]): boolean {
+  return columns.some((column) => column.custom_type_type === "d");
+}
+
 function createAlterConstraintChange(mainTable: Table, branchTable: Table) {
   const changes: TableChange[] = [];
 
@@ -822,6 +826,7 @@ export function diffTables(
         (ctx.version < 170000 ||
           (columnTypeChanged &&
             !canAlterColumnTypeWithoutUsing(mainCol, branchCol)) ||
+          usesDomainType(mainCol, branchCol) ||
           mainCol.is_generated !== branchCol.is_generated ||
           mainCol.not_null ||
           branchCol.not_null ||

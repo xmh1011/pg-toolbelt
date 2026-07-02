@@ -5,6 +5,12 @@ import { diffAggregates } from "./objects/aggregate/aggregate.diff.ts";
 import { AlterAggregateChangeOwner } from "./objects/aggregate/changes/aggregate.alter.ts";
 import { CreateAggregate } from "./objects/aggregate/changes/aggregate.create.ts";
 import { DropAggregate } from "./objects/aggregate/changes/aggregate.drop.ts";
+import {
+  AlterDomainAddConstraint,
+  AlterDomainDropConstraint,
+  AlterDomainDropDefault,
+  AlterDomainSetDefault,
+} from "./objects/domain/changes/domain.alter.ts";
 import { CreateDomain } from "./objects/domain/changes/domain.create.ts";
 import { DropDomain } from "./objects/domain/changes/domain.drop.ts";
 import { AlterIndexSetStatistics } from "./objects/index/changes/index.alter.ts";
@@ -379,6 +385,16 @@ export function expandReplaceDependencies({
             [...changes, ...additions],
           ),
         );
+      }
+      if (reachedFromInvalidation && dependentRaw.startsWith("domain:")) {
+        const replacementChanges = buildDomainDefaultReplacementChanges(
+          dependentRaw,
+          mainCatalog,
+          branchCatalog,
+          [...changes, ...additions],
+        );
+        additions.push(...replacementChanges);
+        trackChangeIds(replacementChanges, createdIds, droppedIds);
       }
       const isColumnReplacementRoot =
         refId.startsWith("column:") &&
@@ -1083,7 +1099,15 @@ function buildConstraintReplacementChanges(
   const tableStableId = stableId.table(parsed.schema, parsed.table);
   const mainTable = mainCatalog.tables[tableStableId];
   const branchTable = branchCatalog.tables[tableStableId];
-  if (!mainTable && !branchTable) return [];
+  if (!mainTable && !branchTable) {
+    return buildDomainConstraintReplacementChanges(
+      parsed,
+      constraintStableId,
+      mainCatalog,
+      branchCatalog,
+      existingChanges,
+    );
+  }
 
   const mainConstraint = mainTable?.constraints.find(
     (constraint) => constraint.name === parsed.constraint,
@@ -1148,6 +1172,97 @@ function buildConstraintReplacementChanges(
         parsed.constraint,
         [...existingChanges, ...replacementChanges],
       ),
+    );
+  }
+
+  return replacementChanges;
+}
+
+function buildDomainConstraintReplacementChanges(
+  parsed: { schema: string; table: string; constraint: string },
+  constraintStableId: string,
+  mainCatalog: Catalog,
+  branchCatalog: Catalog,
+  existingChanges: readonly Change[],
+): Change[] {
+  const domainStableId = `domain:${parsed.schema}.${parsed.table}`;
+  const mainDomain = mainCatalog.domains[domainStableId];
+  const branchDomain = branchCatalog.domains[domainStableId];
+  if (!mainDomain && !branchDomain) return [];
+
+  const mainConstraint = mainDomain?.constraints.find(
+    (constraint) => constraint.name === parsed.constraint,
+  );
+  const branchConstraint = branchDomain?.constraints.find(
+    (constraint) => constraint.name === parsed.constraint,
+  );
+  if (!mainConstraint && !branchConstraint) return [];
+
+  const replacementChanges: Change[] = [];
+  if (
+    mainDomain &&
+    mainConstraint &&
+    !hasDomainConstraintDropChange(existingChanges, constraintStableId)
+  ) {
+    replacementChanges.push(
+      new AlterDomainDropConstraint({
+        domain: mainDomain,
+        constraint: mainConstraint,
+      }),
+    );
+  }
+
+  if (
+    branchDomain &&
+    branchConstraint &&
+    !hasDomainConstraintAddChange(
+      [...existingChanges, ...replacementChanges],
+      constraintStableId,
+    )
+  ) {
+    replacementChanges.push(
+      new AlterDomainAddConstraint({
+        domain: branchDomain,
+        constraint: branchConstraint,
+      }),
+    );
+  }
+
+  return replacementChanges;
+}
+
+function buildDomainDefaultReplacementChanges(
+  domainStableId: string,
+  mainCatalog: Catalog,
+  branchCatalog: Catalog,
+  existingChanges: readonly Change[],
+): Change[] {
+  const mainDomain = mainCatalog.domains[domainStableId];
+  const branchDomain = branchCatalog.domains[domainStableId];
+  if (!mainDomain && !branchDomain) return [];
+
+  const replacementChanges: Change[] = [];
+  if (
+    mainDomain?.default_value !== null &&
+    mainDomain?.default_value !== undefined &&
+    !hasDomainDefaultDropChange(existingChanges, domainStableId)
+  ) {
+    replacementChanges.push(new AlterDomainDropDefault({ domain: mainDomain }));
+  }
+
+  if (
+    branchDomain?.default_value !== null &&
+    branchDomain?.default_value !== undefined &&
+    !hasDomainDefaultSetChange(
+      [...existingChanges, ...replacementChanges],
+      domainStableId,
+    )
+  ) {
+    replacementChanges.push(
+      new AlterDomainSetDefault({
+        domain: branchDomain,
+        defaultValue: branchDomain.default_value,
+      }),
     );
   }
 
@@ -1278,6 +1393,58 @@ function hasConstraintAddChange(
         change.table.name,
         change.constraint.name,
       ) === constraintStableId,
+  );
+}
+
+function hasDomainConstraintDropChange(
+  changes: readonly Change[],
+  constraintStableId: string,
+): boolean {
+  return changes.some(
+    (change) =>
+      change instanceof AlterDomainDropConstraint &&
+      stableId.constraint(
+        change.domain.schema,
+        change.domain.name,
+        change.constraint.name,
+      ) === constraintStableId,
+  );
+}
+
+function hasDomainConstraintAddChange(
+  changes: readonly Change[],
+  constraintStableId: string,
+): boolean {
+  return changes.some(
+    (change) =>
+      change instanceof AlterDomainAddConstraint &&
+      stableId.constraint(
+        change.domain.schema,
+        change.domain.name,
+        change.constraint.name,
+      ) === constraintStableId,
+  );
+}
+
+function hasDomainDefaultDropChange(
+  changes: readonly Change[],
+  domainStableId: string,
+): boolean {
+  return changes.some(
+    (change) =>
+      change instanceof AlterDomainDropDefault &&
+      change.domain.stableId === domainStableId,
+  );
+}
+
+function hasDomainDefaultSetChange(
+  changes: readonly Change[],
+  domainStableId: string,
+): boolean {
+  return changes.some(
+    (change) =>
+      change instanceof AlterDomainSetDefault &&
+      change.domain.stableId === domainStableId,
   );
 }
 

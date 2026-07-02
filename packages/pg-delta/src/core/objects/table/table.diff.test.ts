@@ -1267,6 +1267,65 @@ describe.concurrent("table.diff", () => {
     ]);
   });
 
+  test("postgres 17 rebuilds generated columns when type change lacks an assignment cast", () => {
+    const pg17Context = {
+      ...testContext,
+      version: 170000,
+    };
+    const generatedIntegerColumn = {
+      name: "status_id",
+      position: 1,
+      data_type: "integer",
+      data_type_oid: "23",
+      data_type_str: "integer",
+      assignment_cast_source_type_oids: ["20", "21"],
+      is_custom_type: false,
+      custom_type_type: null,
+      custom_type_category: null,
+      custom_type_schema: null,
+      custom_type_name: null,
+      not_null: false,
+      is_identity: false,
+      is_identity_always: false,
+      is_generated: true,
+      collation: null,
+      default: "id + 1",
+      comment: null,
+    };
+    const generatedUuidColumn = {
+      ...generatedIntegerColumn,
+      data_type: "uuid",
+      data_type_oid: "2950",
+      data_type_str: "uuid",
+      assignment_cast_source_type_oids: [],
+      default: "gen_random_uuid()",
+    };
+    const mainTable = new Table({
+      ...base,
+      name: "t_generated_no_assignment_cast",
+      columns: [generatedIntegerColumn],
+    });
+    const branchTable = new Table({
+      ...base,
+      name: "t_generated_no_assignment_cast",
+      columns: [generatedUuidColumn],
+    });
+
+    const changes = diffTables(
+      pg17Context,
+      { [mainTable.stableId]: mainTable },
+      { [branchTable.stableId]: branchTable },
+    );
+
+    expect(changes.map((change) => change.serialize())).toEqual([
+      "ALTER TABLE public.t_generated_no_assignment_cast DROP COLUMN status_id",
+      "ALTER TABLE public.t_generated_no_assignment_cast ADD COLUMN status_id uuid GENERATED ALWAYS AS (gen_random_uuid()) STORED",
+    ]);
+    expect(
+      changes.some((change) => change instanceof AlterTableAlterColumnType),
+    ).toBe(false);
+  });
+
   test("identity transitions emit drop/add/set-generated changes", () => {
     const serialColumn = {
       name: "id",

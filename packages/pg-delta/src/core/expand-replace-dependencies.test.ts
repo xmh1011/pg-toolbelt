@@ -3214,6 +3214,79 @@ describe("expandReplaceDependencies", () => {
     );
   });
 
+  test("promotes aggregate dependents when an aggregate signature changes", async () => {
+    const baseline = await createEmptyCatalog(170000, "postgres");
+    const mainAggregate = makeAggregate({
+      name: "total_status",
+      identity_arguments: "integer",
+      argument_types: ["integer"],
+      transition_function: "public.amount_transition(bigint,integer)",
+      state_data_type: "bigint",
+      state_data_type_schema: "pg_catalog",
+    });
+    const branchAggregate = makeAggregate({
+      name: "total_status",
+      identity_arguments: "numeric",
+      argument_types: ["numeric"],
+      transition_function: "public.amount_transition(bigint,numeric)",
+      state_data_type: "bigint",
+      state_data_type_schema: "pg_catalog",
+    });
+    const mainView = makeView({
+      name: "status_totals",
+      definition:
+        "SELECT public.total_status(status_id) AS total FROM public.accounts",
+    });
+    const branchView = makeView({
+      name: "status_totals",
+      definition:
+        "SELECT public.total_status(status_value) AS total FROM public.accounts",
+    });
+    const changes: Change[] = [
+      new DropAggregate({ aggregate: mainAggregate }),
+      new CreateAggregate({ aggregate: branchAggregate }),
+    ];
+    const mainCatalog = catalogWith(baseline, {
+      aggregates: { [mainAggregate.stableId]: mainAggregate },
+      views: { [mainView.stableId]: mainView },
+      depends: [
+        {
+          dependent_stable_id: mainView.stableId,
+          referenced_stable_id: mainAggregate.stableId,
+          deptype: "n",
+        },
+      ],
+    });
+    const branchCatalog = catalogWith(baseline, {
+      aggregates: { [branchAggregate.stableId]: branchAggregate },
+      views: { [branchView.stableId]: branchView },
+      depends: [],
+    });
+
+    const expanded = expandReplaceDependencies({
+      changes,
+      mainCatalog,
+      branchCatalog,
+    });
+    const sorted = sortChanges(
+      { mainCatalog, branchCatalog },
+      expanded.changes,
+    );
+    const dropViewIdx = sorted.findIndex((c) => c instanceof DropView);
+    const dropAggregateIdx = sorted.findIndex(
+      (c) => c instanceof DropAggregate,
+    );
+    const createViewIdx = sorted.findIndex((c) => c instanceof CreateView);
+    const createAggregateIdx = sorted.findIndex(
+      (c) => c instanceof CreateAggregate,
+    );
+
+    expect(dropViewIdx).toBeGreaterThanOrEqual(0);
+    expect(createViewIdx).toBeGreaterThanOrEqual(0);
+    expect(dropViewIdx).toBeLessThan(dropAggregateIdx);
+    expect(createViewIdx).toBeGreaterThan(createAggregateIdx);
+  });
+
   test("drops constraints that depend on routines rebuilt from column invalidation", async () => {
     const baseline = await createEmptyCatalog(170000, "postgres");
     const accountIdColumn = {

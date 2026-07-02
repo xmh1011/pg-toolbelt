@@ -687,6 +687,46 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test.skipIf(pgVersion < 17)(
+      "postgres 17 rebuilds generated columns when target type has no assignment cast",
+      withDb(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: `
+          CREATE SCHEMA test_schema;
+          CREATE TABLE test_schema.generated_no_assignment_cast (
+            id integer NOT NULL,
+            status_id integer GENERATED ALWAYS AS (id + 1) STORED
+          );
+
+          INSERT INTO test_schema.generated_no_assignment_cast (id)
+          VALUES (1);
+        `,
+          testSql: `
+          ALTER TABLE test_schema.generated_no_assignment_cast
+            DROP COLUMN status_id;
+          ALTER TABLE test_schema.generated_no_assignment_cast
+            ADD COLUMN status_id uuid
+              GENERATED ALWAYS AS ('00000000-0000-0000-0000-000000000001'::uuid) STORED;
+        `,
+          assertSqlStatements: (sqlStatements) => {
+            expect(sqlStatements).toContain(
+              "ALTER TABLE test_schema.generated_no_assignment_cast DROP COLUMN status_id",
+            );
+            expect(sqlStatements).toContain(
+              "ALTER TABLE test_schema.generated_no_assignment_cast ADD COLUMN status_id uuid GENERATED ALWAYS AS ('00000000-0000-0000-0000-000000000001'::uuid) STORED",
+            );
+            expect(
+              sqlStatements.some((statement) =>
+                statement.includes("ALTER COLUMN status_id TYPE uuid"),
+              ),
+            ).toBe(false);
+          },
+        });
+      }),
+    );
+
+    test.skipIf(pgVersion < 17)(
       "postgres 17 drops generated column indexes before resetting incompatible expressions",
       withDb(pgVersion, async (db) => {
         await roundtripFidelityTest({

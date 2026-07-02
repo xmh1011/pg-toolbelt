@@ -119,6 +119,82 @@ for (const pgVersion of POSTGRES_VERSIONS) {
     );
 
     test(
+      "view depending on old aggregate signature is recreated before aggregate replacement",
+      withDbIsolated(pgVersion, async (db) => {
+        await roundtripFidelityTest({
+          mainSession: db.main,
+          branchSession: db.branch,
+          initialSetup: dedent`
+          CREATE SCHEMA test_schema;
+
+          CREATE TABLE test_schema.aggregate_events (
+            amount integer NOT NULL
+          );
+
+          CREATE FUNCTION test_schema.amount_transition(state bigint, value integer)
+          RETURNS bigint
+          LANGUAGE sql
+          IMMUTABLE
+          AS $$ SELECT state + value $$;
+
+          CREATE AGGREGATE test_schema.total_status(integer)
+          (
+            SFUNC = test_schema.amount_transition,
+            STYPE = bigint,
+            INITCOND = '0'
+          );
+
+          CREATE VIEW test_schema.total_status_view AS
+            SELECT test_schema.total_status(amount) AS total
+            FROM test_schema.aggregate_events;
+        `,
+          testSql: dedent`
+          DROP VIEW test_schema.total_status_view;
+          DROP AGGREGATE test_schema.total_status(integer);
+
+          CREATE FUNCTION test_schema.amount_transition(state bigint, value numeric)
+          RETURNS bigint
+          LANGUAGE sql
+          IMMUTABLE
+          AS $$ SELECT state + value::bigint $$;
+
+          CREATE AGGREGATE test_schema.total_status(numeric)
+          (
+            SFUNC = test_schema.amount_transition,
+            STYPE = bigint,
+            INITCOND = '0'
+          );
+
+          CREATE VIEW test_schema.total_status_view AS
+            SELECT test_schema.total_status(amount::numeric) AS total
+            FROM test_schema.aggregate_events;
+        `,
+          assertSqlStatements: (sqlStatements) => {
+            const dropViewIndex = sqlStatements.indexOf(
+              "DROP VIEW test_schema.total_status_view",
+            );
+            const dropAggregateIndex = sqlStatements.indexOf(
+              "DROP AGGREGATE test_schema.total_status(integer)",
+            );
+            const createAggregateIndex = sqlStatements.findIndex((statement) =>
+              statement.startsWith(
+                "CREATE AGGREGATE test_schema.total_status(numeric)",
+              ),
+            );
+            const createViewIndex = sqlStatements.findIndex((statement) =>
+              statement.includes("VIEW test_schema.total_status_view AS"),
+            );
+
+            expect(dropViewIndex).toBeGreaterThanOrEqual(0);
+            expect(dropAggregateIndex).toBeGreaterThan(dropViewIndex);
+            expect(createAggregateIndex).toBeGreaterThan(dropAggregateIndex);
+            expect(createViewIndex).toBeGreaterThan(createAggregateIndex);
+          },
+        });
+      }),
+    );
+
+    test(
       "aggregate metadata survives transition function replacement",
       withDbIsolated(pgVersion, async (db) => {
         await roundtripFidelityTest({
